@@ -2,61 +2,44 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Numismat.net Ürün Tarayıcı</title>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
   <style>
     :root { --pad: 14px; }
-    body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background:#f4f6f8; color:#111; margin:0; padding:20px;
-      display:flex; flex-direction:column; align-items:center; gap:16px;
-    }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:#f4f6f8; color:#111; margin:0; padding:20px; display:flex; flex-direction:column; align-items:center; gap:16px; }
     h1 { font-size:22px; margin:6px 0 4px; }
-    .wrap { width: min(960px, 95vw); display:grid; grid-template-columns: 360px 1fr; gap:16px; }
+    .wrap { width: min(1000px, 96vw); display:grid; grid-template-columns: 360px 1fr; gap:16px; }
     @media (max-width: 820px) {.wrap{grid-template-columns:1fr}}
-    .card {
-      background:#fff; border:1px solid #e5e7eb; border-radius:10px;
-      box-shadow: 0 3px 10px rgba(0,0,0,.06);
-    }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; box-shadow: 0 3px 10px rgba(0,0,0,.06); }
     .card > .hd { padding:10px var(--pad); font-weight:600; border-bottom:1px solid #eef1f4; }
     .card > .bd { padding: var(--pad); }
-
     #info img { width:100%; border-radius:6px; object-fit:cover; max-height:220px; }
-    table { width:100%; border-collapse: collapse; margin-top:8px; }
-    th, td { padding:8px; text-align:left; }
-    th { width:120px; color:#333; background:#f1f5f9 }
-    tr:nth-child(even) td { background:#fafafa; }
-    tr:hover td { background:#e8f4ff; }
-
+    table { width:100%; border-collapse: collapse; margin-top:8px; } th, td { padding:8px; text-align:left; }
+    th { width:120px; color:#333; background:#f1f5f9 } tr:nth-child(even) td { background:#fafafa; } tr:hover td { background:#e8f4ff; }
     .btn { padding:10px 14px; font-size:15px; border:none; border-radius:6px; cursor:pointer; color:#fff; background:#2563eb; }
-    .btn:hover { filter:brightness(.95); }
-    .btn.sold { background:#16a34a; }
-    .btn.secondary { background:#6b7280; }
-    .btn.light { background:#111827; color:#fff; }
+    .btn:hover { filter:brightness(.95); } .btn.sold { background:#16a34a; } .btn.secondary { background:#6b7280; } .btn.light { background:#111827; }
     .btn-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-
     .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-    .controls label { font-size:14px; color:#374151; }
-    .controls select, .controls input[type="range"] {
-      padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#fff;
-    }
+    .controls label { font-size:14px; color:#374151; display:flex; align-items:center; gap:6px; }
+    .controls select, .controls input[type="range"] { padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#fff; }
     #reader__scan_region { width:100%; min-height:380px; }
     #videoWrap { position:relative; }
-    #videoWrap::after {
-      content:""; position:absolute; inset:0; pointer-events:none;
-      border:2px solid rgba(255,255,255,.6); border-radius:10px;
-      margin: 20px; /* visual guide */
-    }
+    #videoWrap::after { content:""; position:absolute; inset:0; pointer-events:none; border:2px solid rgba(255,255,255,.6); border-radius:10px; margin: 20px; }
     .hint { font-size:12px; color:#6b7280; margin-top:6px; }
+    pre.debug { background:#0b1220; color:#d1e7ff; padding:10px; border-radius:8px; overflow:auto; max-height:240px; font-size:12px; }
+    .warn { color:#b45309; font-weight:600; }
+    .ok { color:#059669; font-weight:600; }
+    .disabled { opacity:.5; pointer-events:none; }
   </style>
 </head>
 <body>
   <h1>Numismat.net Ürün Tarayıcı</h1>
 
   <div class="wrap">
-    <!-- Product info card -->
+    <!-- Product info -->
     <div id="info" class="card">
       <div class="hd">Ürün Bilgisi</div>
       <div class="bd">
@@ -74,7 +57,7 @@
       </div>
     </div>
 
-    <!-- Scanner card -->
+    <!-- Scanner -->
     <div class="card">
       <div class="hd">Kamera Tarayıcı</div>
       <div class="bd">
@@ -85,8 +68,10 @@
           <button class="btn light" id="startBtn">Başlat</button>
           <button class="btn secondary" id="stopBtn" disabled>Dur</button>
 
-          <label id="zoomLabel" style="display:none;">Yakınlaştırma:
-            <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1">
+          <!-- Always visible; disabled if unsupported -->
+          <label id="zoomLabel">Yakınlaştırma:
+            <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" disabled>
+            <span id="zoomVal">1.0x</span>
           </label>
 
           <button class="btn" id="torchBtn" style="display:none;">Flaş Aç</button>
@@ -96,15 +81,19 @@
         <div id="videoWrap" style="margin-top:12px;">
           <div id="reader__scan_region"></div>
         </div>
-        <div class="hint">İpucu: Zoom/odak/torch bazı cihazlarda desteklenir. iOS Safari genelde kısıtlıdır.</div>
+        <div class="hint">
+          HTTPS üzerinde açın. Android Chrome çoğu cihazda zoom/torch destekler; iOS Safari genelde kısıtlıdır.
+        </div>
+
+        <h3 style="margin-top:14px;">Debug</h3>
+        <pre class="debug" id="debugBox">Hazır…</pre>
       </div>
     </div>
   </div>
 
   <script>
     // =================== CONFIG ===================
-    // DO NOT expose Telegram token in frontend. Call a backend you control.
-    const TELEGRAM_BACKEND_ENDPOINT = ""; // e.g. "/api/sold"
+    const TELEGRAM_BACKEND_ENDPOINT = ""; // e.g. "/api/sold" — keep empty to disable
     const SCAN_FPS = 12;
     const QRBOX_SIZE = 320;
     const DEFAULT_ZOOM = 2;
@@ -113,8 +102,8 @@
     let html5QrCode = null;
     let runningCameraId = null;
     let runningTrack = null;
-    let torchOn = false;
     let capsCache = null;
+    let torchOn = false;
 
     const el = (id) => document.getElementById(id);
     const cameraSelect = el("cameraSelect");
@@ -122,10 +111,21 @@
     const stopBtn = el("stopBtn");
     const zoomSlider = el("zoomSlider");
     const zoomLabel = el("zoomLabel");
+    const zoomVal = el("zoomVal");
     const torchBtn = el("torchBtn");
     const focusBtn = el("focusBtn");
+    const debugBox = el("debugBox");
 
-    // Populate camera list
+    function logDebug(objOrMsg) {
+      const t = new Date().toLocaleTimeString();
+      if (typeof objOrMsg === "string") {
+        debugBox.textContent += `\n[${t}] ${objOrMsg}`;
+      } else {
+        debugBox.textContent += `\n[${t}] ` + JSON.stringify(objOrMsg, null, 2);
+      }
+      debugBox.scrollTop = debugBox.scrollHeight;
+    }
+
     async function listCameras() {
       const cams = await Html5Qrcode.getCameras();
       cameraSelect.innerHTML = "";
@@ -137,9 +137,25 @@
       });
       let preferred = cams.find(c => /back|rear|environment/i.test(c.label)) || cams[cams.length - 1] || cams[0];
       if (preferred) cameraSelect.value = preferred.id;
+      logDebug({ cameras: cams });
     }
 
-    // Start scanning
+    // Try to get the current video track (two strategies)
+    function resolveVideoTrack() {
+      // 1) from html5-qrcode (if available)
+      if (html5QrCode && typeof html5QrCode.getRunningTrack === "function") {
+        const tr = html5QrCode.getRunningTrack();
+        if (tr) return tr;
+      }
+      // 2) from the <video> element
+      const video = document.querySelector("#reader__scan_region video");
+      if (video && video.srcObject) {
+        const tracks = video.srcObject.getVideoTracks();
+        if (tracks && tracks.length) return tracks[0];
+      }
+      return null;
+    }
+
     async function startScanner() {
       try {
         if (!html5QrCode) html5QrCode = new Html5Qrcode("reader__scan_region");
@@ -152,43 +168,64 @@
           onScanError
         );
 
-        // After start, read capabilities & configure UI
-        runningTrack = html5QrCode.getRunningTrack && html5QrCode.getRunningTrack();
-        capsCache = runningTrack && runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
-        if (capsCache) {
-          // Zoom support
-          if (capsCache.zoom) {
-            zoomSlider.min = capsCache.zoom.min ?? 1;
-            zoomSlider.max = capsCache.zoom.max ?? 3;
-            zoomSlider.step = capsCache.zoom.step ?? 0.1;
+        // Give the video element a brief moment to attach
+        await new Promise(r => setTimeout(r, 150));
+
+        runningTrack = resolveVideoTrack();
+        if (!runningTrack) {
+          logDebug("⚠️ Video track bulunamadı. Zoom/odak çalışmaz.");
+        } else {
+          const settings = runningTrack.getSettings ? runningTrack.getSettings() : {};
+          const caps = runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
+          capsCache = caps;
+          logDebug({ settings, capabilities: caps });
+
+          // Zoom UI
+          if (caps && caps.zoom) {
+            zoomSlider.disabled = false;
+            zoomSlider.min = caps.zoom.min ?? 1;
+            zoomSlider.max = caps.zoom.max ?? 3;
+            zoomSlider.step = caps.zoom.step ?? 0.1;
             const initZoom = Math.max(zoomSlider.min, Math.min(zoomSlider.max, DEFAULT_ZOOM));
             zoomSlider.value = initZoom;
-            await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] }).catch(()=>{});
-            zoomLabel.style.display = "inline-block";
+            zoomVal.textContent = `${Number(zoomSlider.value).toFixed(1)}x`;
+            try {
+              await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
+              logDebug(`Zoom set to ${zoomSlider.value}`);
+            } catch (e) {
+              logDebug(`Zoom apply failed: ${e.message || e}`);
+              zoomSlider.disabled = true;
+            }
           } else {
-            zoomLabel.style.display = "none";
+            zoomSlider.disabled = true;
+            logDebug("Zoom capability yok (caps.zoom bulunamadı).");
           }
 
-          // Continuous focus if possible
-          if (capsCache.focusMode && capsCache.focusMode.includes("continuous")) {
-            await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+          // Continuous focus
+          if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
+            try {
+              await applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+              logDebug("focusMode: continuous uygulandı.");
+            } catch { logDebug("focusMode continuous uygulanamadı."); }
           }
 
-          // Torch support
-          if (capsCache.torch) {
+          // Torch
+          if (caps && caps.torch) {
             torchBtn.style.display = "inline-block";
-            torchBtn.textContent = "Flaş Aç";
             torchOn = false;
+            torchBtn.textContent = "Flaş Aç";
           } else {
             torchBtn.style.display = "none";
+            logDebug("Torch capability yok.");
           }
         }
 
         startBtn.disabled = true;
         stopBtn.disabled = false;
       } catch (err) {
-        console.error("Start error:", err);
-        alert("Kamera başlatılamadı. İzinleri ve başka bir uygulamanın kamerayı kullanmadığını kontrol edin.");
+        console.error(err);
+        logDebug(`Start error: ${err.message || err}`);
+        alert("Kamera başlatılamadı. İzinleri ve başka bir uygulamanın kamerayı kullanmadığını kontrol edin. Siteyi HTTPS üzerinden açın.");
       }
     }
 
@@ -199,8 +236,9 @@
         }
         runningTrack = null;
         capsCache = null;
-      } catch(e) {
-        console.warn("Stop error:", e);
+        torchOn = false;
+      } catch (e) {
+        logDebug(`Stop error: ${e.message || e}`);
       } finally {
         startBtn.disabled = false;
         stopBtn.disabled = true;
@@ -208,54 +246,61 @@
     }
 
     function onScanSuccess(qrText) {
-      console.log("QR:", qrText);
-      stopScanner(); // Stop after a successful scan
+      logDebug({ scanned: qrText });
+      stopScanner();
       fetchProductData(qrText);
     }
-    function onScanError(_) { /* often decoding noise; ignore */ }
+    function onScanError(_) { /* noisy decode errors */ }
 
     async function applyConstraints(constraints) {
       if (runningTrack && runningTrack.applyConstraints) {
         await runningTrack.applyConstraints(constraints);
+      } else {
+        throw new Error("applyConstraints desteklenmiyor (track yok).");
       }
     }
 
-    // ----- Focus Center logic -----
+    // Focus Center with fallbacks
     async function focusCenter() {
-      if (!runningTrack) return;
+      if (!runningTrack) { logDebug("Focus failed: track yok."); return; }
+      const caps = capsCache || (runningTrack.getCapabilities ? runningTrack.getCapabilities() : null);
+      logDebug("Focus center attempt…");
 
       try {
-        const caps = capsCache || (runningTrack.getCapabilities ? runningTrack.getCapabilities() : null);
-
-        // 1) Try pointsOfInterest to center (0.5, 0.5)
+        // 1) pointsOfInterest
         if (caps && "pointsOfInterest" in caps) {
           await applyConstraints({ advanced: [{ pointsOfInterest: [{ x: 0.5, y: 0.5 }] }] });
-          // Also try single-shot if available to force refocus
+          logDebug("pointsOfInterest (0.5,0.5) uygulandı.");
+          // force a refocus pulse if available
           if (caps.focusMode && caps.focusMode.includes("single-shot")) {
             await applyConstraints({ advanced: [{ focusMode: "single-shot" }] }).catch(()=>{});
-            // go back to continuous if supported
+            logDebug("focusMode: single-shot pulse.");
             if (caps.focusMode.includes("continuous")) {
               await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+              logDebug("focusMode: continuous geri yüklendi.");
             }
           }
           return;
         }
-
-        // 2) If no POI, try single-shot pulse
+        // 2) single-shot pulse
         if (caps && caps.focusMode && caps.focusMode.includes("single-shot")) {
           await applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          logDebug("focusMode: single-shot uygulandı.");
           if (caps.focusMode.includes("continuous")) {
             await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+            logDebug("focusMode: continuous geri yüklendi.");
           }
           return;
         }
-
-        // 3) Fallback: reapply continuous (nudges AF on some devices)
+        // 3) fallback: re-apply continuous
         if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
           await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+          logDebug("focusMode: continuous tekrar uygulandı (fallback).");
+          return;
         }
+        logDebug("Odak desteği yok (pointsOfInterest / single-shot / continuous yok).");
       } catch (e) {
-        console.warn("Focus center not supported:", e);
+        logDebug(`Focus error: ${e.message || e}`);
       }
     }
 
@@ -263,20 +308,29 @@
     startBtn.addEventListener("click", startScanner);
     stopBtn.addEventListener("click", stopScanner);
     zoomSlider.addEventListener("input", async (e) => {
-      await applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] })
-        .catch(err => console.warn("Zoom not supported:", err));
+      zoomVal.textContent = `${Number(e.target.value).toFixed(1)}x`;
+      try {
+        await applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] });
+      } catch (err) {
+        logDebug(`Zoom change failed: ${err.message || err}`);
+      }
     });
     torchBtn.addEventListener("click", async () => {
-      torchOn = !torchOn;
-      await applyConstraints({ advanced: [{ torch: torchOn }] }).catch(err => {
+      const caps = capsCache;
+      if (!(caps && caps.torch)) return;
+      try {
+        torchOn = !torchOn;
+        await applyConstraints({ advanced: [{ torch: torchOn }] });
+        torchBtn.textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
+        logDebug(`Torch: ${torchOn ? "ON" : "OFF"}`);
+      } catch (e) {
         torchOn = !torchOn; // revert
-        console.warn("Torch not supported:", err);
-      });
-      torchBtn.textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
+        logDebug(`Torch failed: ${e.message || e}`);
+      }
     });
     focusBtn.addEventListener("click", focusCenter);
 
-    // CSV lookup (keeping your logic, with small hardening)
+    // CSV lookup
     function fetchProductData(qrLink) {
       Papa.parse("products.csv", {
         download: true,
@@ -327,20 +381,14 @@
         alert("Telegram gönderimi devre dışı (backend endpoint tanımlı değil).");
         return;
       }
-
       try {
         const res = await fetch(TELEGRAM_BACKEND_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: message })
         });
-        if (res.ok) {
-          alert("Telegram mesajı gönderildi.");
-        } else {
-          alert("Telegram mesajı gönderilemedi.");
-        }
+        alert(res.ok ? "Telegram mesajı gönderildi." : "Telegram mesajı gönderilemedi.");
       } catch (e) {
-        console.error("Telegram hata:", e);
         alert("Telegram servisine bağlanırken hata oluştu.");
       }
     }
@@ -360,12 +408,13 @@
       await startScanner();
     }
 
-    // Initialize
+    // Init
     (async () => {
-      try { await listCameras(); }
+      try { await listCameras(); logDebug("Hazır. Başlat'a basın."); }
       catch (e) {
         console.error(e);
-        alert("Kameralar listelenemedi. Tarayıcı izinlerini kontrol edin.");
+        logDebug(`Camera list error: ${e.message || e}`);
+        alert("Kameralar listelenemedi. İzinleri kontrol edin.");
       }
     })();
 
