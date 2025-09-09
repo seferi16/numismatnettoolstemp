@@ -47,7 +47,7 @@
     #videoWrap::after {
       content:""; position:absolute; inset:0; pointer-events:none;
       border:2px solid rgba(255,255,255,.6); border-radius:10px;
-      margin: 20px;
+      margin: 20px; /* visual guide */
     }
     .hint { font-size:12px; color:#6b7280; margin-top:6px; }
   </style>
@@ -90,31 +90,31 @@
           </label>
 
           <button class="btn" id="torchBtn" style="display:none;">Flaş Aç</button>
+          <button class="btn" id="focusBtn">Ortaya Odakla</button>
         </div>
 
         <div id="videoWrap" style="margin-top:12px;">
           <div id="reader__scan_region"></div>
         </div>
-        <div class="hint">İpucu: Destekleyen cihazlarda yakınlaştırma ve flaş kullanılabilir. iOS Safari genelde zoom/focus kısıtlıdır.</div>
+        <div class="hint">İpucu: Zoom/odak/torch bazı cihazlarda desteklenir. iOS Safari genelde kısıtlıdır.</div>
       </div>
     </div>
   </div>
 
   <script>
     // =================== CONFIG ===================
-    // NEVER expose your Telegram token in frontend code.
-    const TELEGRAM_BACKEND_ENDPOINT = ""; 
-    // e.g. "/api/sold" on your server. Leave empty to disable Telegram sending.
-
+    // DO NOT expose Telegram token in frontend. Call a backend you control.
+    const TELEGRAM_BACKEND_ENDPOINT = ""; // e.g. "/api/sold"
     const SCAN_FPS = 12;
     const QRBOX_SIZE = 320;
-    const DEFAULT_ZOOM = 2; // applied if supported
+    const DEFAULT_ZOOM = 2;
     // ==============================================
 
     let html5QrCode = null;
     let runningCameraId = null;
     let runningTrack = null;
     let torchOn = false;
+    let capsCache = null;
 
     const el = (id) => document.getElementById(id);
     const cameraSelect = el("cameraSelect");
@@ -123,6 +123,7 @@
     const zoomSlider = el("zoomSlider");
     const zoomLabel = el("zoomLabel");
     const torchBtn = el("torchBtn");
+    const focusBtn = el("focusBtn");
 
     // Populate camera list
     async function listCameras() {
@@ -134,8 +135,6 @@
         opt.textContent = c.label || `Kamera ${i+1}`;
         cameraSelect.appendChild(opt);
       });
-
-      // Prefer back camera if we can guess it (often last / contains "back"/"rear")
       let preferred = cams.find(c => /back|rear|environment/i.test(c.label)) || cams[cams.length - 1] || cams[0];
       if (preferred) cameraSelect.value = preferred.id;
     }
@@ -153,50 +152,35 @@
           onScanError
         );
 
-        // After start, try to configure zoom / focus / torch
+        // After start, read capabilities & configure UI
         runningTrack = html5QrCode.getRunningTrack && html5QrCode.getRunningTrack();
-        if (runningTrack && runningTrack.getCapabilities) {
-          const caps = runningTrack.getCapabilities();
-
+        capsCache = runningTrack && runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
+        if (capsCache) {
           // Zoom support
-          if (caps.zoom) {
-            zoomSlider.min = caps.zoom.min || 1;
-            zoomSlider.max = caps.zoom.max || 3;
-            zoomSlider.step = caps.zoom.step || 0.1;
-            // set default near DEFAULT_ZOOM (clamped)
+          if (capsCache.zoom) {
+            zoomSlider.min = capsCache.zoom.min ?? 1;
+            zoomSlider.max = capsCache.zoom.max ?? 3;
+            zoomSlider.step = capsCache.zoom.step ?? 0.1;
             const initZoom = Math.max(zoomSlider.min, Math.min(zoomSlider.max, DEFAULT_ZOOM));
             zoomSlider.value = initZoom;
-            await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
+            await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] }).catch(()=>{});
             zoomLabel.style.display = "inline-block";
           } else {
             zoomLabel.style.display = "none";
           }
 
           // Continuous focus if possible
-          if (caps.focusMode && caps.focusMode.includes("continuous")) {
+          if (capsCache.focusMode && capsCache.focusMode.includes("continuous")) {
             await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
           }
 
           // Torch support
-          if (caps.torch) {
+          if (capsCache.torch) {
             torchBtn.style.display = "inline-block";
             torchBtn.textContent = "Flaş Aç";
             torchOn = false;
           } else {
             torchBtn.style.display = "none";
-          }
-
-          // Tap-to-focus hint (very limited support)
-          const videoEl = document.querySelector("#reader__scan_region video");
-          if (videoEl) {
-            videoEl.addEventListener("click", async () => {
-              if (runningTrack && runningTrack.applyConstraints) {
-                // Try a brief refocus by toggling focusMode if supported
-                if (caps.focusMode && caps.focusMode.includes("continuous")) {
-                  await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
-                }
-              }
-            });
           }
         }
 
@@ -204,7 +188,7 @@
         stopBtn.disabled = false;
       } catch (err) {
         console.error("Start error:", err);
-        alert("Kamera başlatılamadı. Tarayıcı izinlerini ve başka uygulamaların kamerayı kullanmadığını kontrol edin.");
+        alert("Kamera başlatılamadı. İzinleri ve başka bir uygulamanın kamerayı kullanmadığını kontrol edin.");
       }
     }
 
@@ -214,6 +198,7 @@
           await html5QrCode.stop();
         }
         runningTrack = null;
+        capsCache = null;
       } catch(e) {
         console.warn("Stop error:", e);
       } finally {
@@ -223,13 +208,11 @@
     }
 
     function onScanSuccess(qrText) {
-      console.log("QR Kod:", qrText);
+      console.log("QR:", qrText);
       stopScanner(); // Stop after a successful scan
       fetchProductData(qrText);
     }
-    function onScanError(err) {
-      // Silence frequent decode errors
-    }
+    function onScanError(_) { /* often decoding noise; ignore */ }
 
     async function applyConstraints(constraints) {
       if (runningTrack && runningTrack.applyConstraints) {
@@ -237,11 +220,51 @@
       }
     }
 
+    // ----- Focus Center logic -----
+    async function focusCenter() {
+      if (!runningTrack) return;
+
+      try {
+        const caps = capsCache || (runningTrack.getCapabilities ? runningTrack.getCapabilities() : null);
+
+        // 1) Try pointsOfInterest to center (0.5, 0.5)
+        if (caps && "pointsOfInterest" in caps) {
+          await applyConstraints({ advanced: [{ pointsOfInterest: [{ x: 0.5, y: 0.5 }] }] });
+          // Also try single-shot if available to force refocus
+          if (caps.focusMode && caps.focusMode.includes("single-shot")) {
+            await applyConstraints({ advanced: [{ focusMode: "single-shot" }] }).catch(()=>{});
+            // go back to continuous if supported
+            if (caps.focusMode.includes("continuous")) {
+              await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+            }
+          }
+          return;
+        }
+
+        // 2) If no POI, try single-shot pulse
+        if (caps && caps.focusMode && caps.focusMode.includes("single-shot")) {
+          await applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          if (caps.focusMode.includes("continuous")) {
+            await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+          }
+          return;
+        }
+
+        // 3) Fallback: reapply continuous (nudges AF on some devices)
+        if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
+          await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+        }
+      } catch (e) {
+        console.warn("Focus center not supported:", e);
+      }
+    }
+
     // UI events
     startBtn.addEventListener("click", startScanner);
     stopBtn.addEventListener("click", stopScanner);
     zoomSlider.addEventListener("input", async (e) => {
-      await applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] }).catch(err => console.warn("Zoom not supported:", err));
+      await applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] })
+        .catch(err => console.warn("Zoom not supported:", err));
     });
     torchBtn.addEventListener("click", async () => {
       torchOn = !torchOn;
@@ -251,15 +274,17 @@
       });
       torchBtn.textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
     });
+    focusBtn.addEventListener("click", focusCenter);
 
-    // CSV lookup (kept from your original, with small tweaks)
+    // CSV lookup (keeping your logic, with small hardening)
     function fetchProductData(qrLink) {
       Papa.parse("products.csv", {
         download: true,
         header: true,
         complete: function(results) {
           const rows = results.data || [];
-          const product = rows.find(row => (row.link || "").trim() === (qrLink || "").trim());
+          const norm = (s) => (s || "").trim();
+          const product = rows.find(row => norm(row.link) === norm(qrLink));
           if (product) {
             el("name-tr").innerText = product.name_tr || "-";
             const price = Number(product.price);
@@ -277,7 +302,7 @@
         },
         error: function(err) {
           console.error("CSV hatası:", err);
-          alert("Ürün listesini yükleyemedik (products.csv).");
+          alert("Ürün listesini (products.csv) yükleyemedik.");
         }
       });
     }
@@ -335,17 +360,16 @@
       await startScanner();
     }
 
-    // Initialize camera list on load
+    // Initialize
     (async () => {
-      try {
-        await listCameras();
-      } catch (e) {
+      try { await listCameras(); }
+      catch (e) {
         console.error(e);
         alert("Kameralar listelenemedi. Tarayıcı izinlerini kontrol edin.");
       }
     })();
 
-    // Expose some functions used in HTML attributes
+    // Expose for inline onclicks
     window.goToProduct = goToProduct;
     window.markAsSold = markAsSold;
     window.rescan = rescan;
