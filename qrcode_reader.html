@@ -1,235 +1,312 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Back Cam QR + Zoom (Big)</title>
-  <script src="https://unpkg.com/html5-qrcode"></script>
-  <style>
-    :root { --pad: 14px; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 16px; background: #0f172a; color: #e5e7eb;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      display: flex; flex-direction: column; gap: 12px; align-items: center;
-    }
-    h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #fff; }
-    .controls {
-      display: flex; gap: 10px; align-items: center; flex-wrap: wrap; width: 100%;
-      max-width: 1100px; justify-content: center;
-    }
-    .btn {
-      padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; color: #fff;
-      background: #2563eb; font-size: 15px; font-weight: 600;
-    }
-    .btn.secondary { background: #475569; }
-    .slider-wrap {
-      display: flex; align-items: center; gap: 10px; color: #cbd5e1; font-size: 14px;
-      background: #0b1220; padding: 8px 12px; border-radius: 10px;
-    }
-    input[type="range"] { width: 220px; }
-    .stage {
-      width: min(1100px, 96vw);
-      height: min(75vh, 720px);
-      border: 2px solid #334155; border-radius: 12px; overflow: hidden;
-      background: #000; display: flex; align-items: stretch; justify-content: stretch;
-    }
-    /* Make the internal video/canvas fill big */
-    #reader { width: 100%; height: 100%; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Numismat.net Ürün Tarayıcı</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        /* ... your existing styles ... */
+        .btn {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-sold {
+            background-color: #28a745; /* Green color for Sold button */
+        }
+    </style>
 </head>
 <body>
-  <h1>Back Camera QR Scanner</h1>
 
-  <div class="controls">
-    <button id="startBtn" class="btn">Start (Back Cam)</button>
-    <button id="stopBtn" class="btn secondary" disabled>Stop</button>
+    <h1>Numismat.net Ürün Tarayıcı</h1>
+    
+    <div id="info">
+        <img id="product-image" src="placeholder.jpg" alt="Ürün Görseli">
+        <table>
+            <tr><th>Başlık:</th><td id="name-tr">[Henüz taranmadı.]</td></tr>
+            <tr><th>Fiyat:</th><td id="price">[Henüz taranmadı.]</td></tr>
+            <tr><th>Stok Kodu:</th><td id="model">[Henüz taranmadı.]</td></tr>
+        </table>
+        <button id="product-link" class="btn" onclick="goToProduct()" style="display:none;">Ürüne Git</button>
+        <button id="sold-button" class="btn btn-sold" onclick="markAsSold()" style="display:none;">Ürün Satıldı</button>
+        <button id="rescan-button" class="btn" onclick="rescan()">Yeniden Tara</button>
+        <div id="zoom-controls" style="display:none; margin-top:8px;">
+          <button id="zoom-minus" class="btn" style="width:44px;padding:6px 0;">−</button>
+          <input id="zoom-slider" type="range" min="1" max="3" step="0.1" value="1"
+                 style="vertical-align:middle; width:180px; margin:0 8px;">
+          <button id="zoom-plus" class="btn" style="width:44px;padding:6px 0;">+</button>
+          <span id="zoom-label" style="margin-left:8px; font-size:14px; color:#333;">×1.0</span>
+        </div>
 
-    <div class="slider-wrap">
-      <span>Zoom</span>
-      <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" disabled>
-      <span id="zoomVal">1.0×</span>
     </div>
-  </div>
 
-  <div class="stage">
-    <div id="reader"></div>
-  </div>
+    <div id="reader__scan_region"></div>
 
-  <script>
-    // ===== Basic config =====
-    const SCAN_FPS = 12;
-    const ASPECT = 1.7778; // 16:9
-    const DEFAULT_ZOOM = 3.5; // will be clamped to device max
-    // ========================
+    <script defer>
+            // Set your Telegram bot token and chat ID here
+            const TELEGRAM_BOT_TOKEN = '5191762597:AAH6kIJsjfuX6DIbbsfskSrBiNTQI5v8bSk';
+            const TELEGRAM_CHAT_ID = '423739694';
+            const DEFAULT_ZOOM = 2;
 
-    let html5QrCode = null;
-    let runningTrack = null;
-    let capsCache = null;
-    const startBtn = document.getElementById("startBtn");
-    const stopBtn  = document.getElementById("stopBtn");
-    const zoomSlider = document.getElementById("zoomSlider");
-    const zoomVal = document.getElementById("zoomVal");
-
-    function looksLikeBack(label, facing) {
-      if (String(facing || "").toLowerCase() === "environment") return true;
-      return /tele|macro|environment|back|rear/i.test(label || "");
-    }
-
-    function resolveVideoTrack() {
-      if (html5QrCode && typeof html5QrCode.getRunningTrack === "function") {
-        const t = html5QrCode.getRunningTrack();
-        if (t) return t;
-      }
-      const video = document.querySelector("#reader video");
-      if (video && video.srcObject) {
-        const tracks = video.srcObject.getVideoTracks();
-        if (tracks && tracks.length) return tracks[0];
-      }
-      return null;
-    }
-
-    async function ensurePermission() {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: true });
-        s.getTracks().forEach(t => t.stop());
-      } catch (e) {
-        alert("Kamera izni gerekli.");
-        throw e;
-      }
-    }
-
-    async function startHtml5Qrcode(constraint) {
-      if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
-      await html5QrCode.start(
-        constraint,
-        {
-          fps: SCAN_FPS,
-          aspectRatio: ASPECT,
-          // no qrbox -> full frame decode for simplicity; big preview
-          videoConstraints: { width: { ideal: 1920 }, height: { ideal: 1080 } }
-        },
-        onScanSuccess,
-        onScanError
-      );
-      await new Promise(r => setTimeout(r, 120));
-      runningTrack = resolveVideoTrack();
-      capsCache = runningTrack && runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
-      setupZoomUI();
-    }
-
-    async function startBackCamera() {
-      startBtn.disabled = true;
-      try {
-        await ensurePermission();
-
-        // 1) Try pure facingMode: environment
-        try {
-          await startHtml5Qrcode({ facingMode: { exact: "environment" } });
-          const facing = runningTrack?.getSettings?.().facingMode;
-          if (looksLikeBack("", facing)) {
-            stopBtn.disabled = false;
-            return;
-          }
-          // If driver lied, fall through to iteration
-          await stopScanner();
-        } catch (_) {
-          // continue to iteration
-        }
-
-        // 2) Iterate deviceIds to find a back-ish camera
-        const cams = await Html5Qrcode.getCameras();
-        // Back-labeled first
-        const ordered = [...cams].sort((a, b) => {
-          const A = looksLikeBack(a.label), B = looksLikeBack(b.label);
-          return (A === B) ? 0 : (A ? -1 : 1);
-        });
-
-        for (const cam of ordered) {
-          try {
-            await startHtml5Qrcode({ deviceId: { exact: cam.id } });
-            const facing = runningTrack?.getSettings?.().facingMode;
-            if (looksLikeBack(cam.label, facing)) {
-              stopBtn.disabled = false;
-              return; // success
-            } else {
-              await stopScanner();
+            function onScanSuccess(qrMessage) {
+                console.log(`QR Kod tespit edildi: ${qrMessage}`);
+                html5QrcodeScanner.clear(); // Stop scanner after successful read
+                fetchProductData(qrMessage); // Fetch product data
             }
-          } catch (_) {
-            // try next
-          }
-        }
 
-        // 3) Last resort: non-exact environment (some browsers accept this)
-        try {
-          await startHtml5Qrcode({ facingMode: "environment" });
-          stopBtn.disabled = false;
+            const html5QrcodeScanner = new Html5QrcodeScanner("reader__scan_region", { fps: 10, qrbox: 350 });
+            html5QrcodeScanner.render(onScanSuccess, undefined, adjustZoom);
+
+            const DEFAULT_ZOOM = 2; // your preferred starting zoom
+
+    // After this line:
+    // html5QrcodeScanner.render(onScanSuccess, undefined, adjustZoom);
+    // change it to:
+    html5QrcodeScanner.render(onScanSuccess, undefined);
+    setupZoomControls();
+
+    // ------ Zoom control logic ------
+    function setupZoomControls() {
+      const zoomUI = document.getElementById("zoom-controls");
+      const slider = document.getElementById("zoom-slider");
+      const label  = document.getElementById("zoom-label");
+      const minus  = document.getElementById("zoom-minus");
+      const plus   = document.getElementById("zoom-plus");
+
+      // Poll until the track is available (scanner needs a moment to start)
+      const tryInit = () => {
+        const track = getRunningVideoTrack();
+        if (!track) {
+          setTimeout(tryInit, 300);
           return;
-        } catch (e) {
-          throw e;
         }
 
-      } catch (err) {
-        console.error(err);
-        alert("Arka kamerayı başlatamadık (izin/cihaz kısıtı).");
-        startBtn.disabled = false;
-      }
-    }
+        const caps = track.getCapabilities ? track.getCapabilities() : null;
+        const settings = track.getSettings ? track.getSettings() : {};
 
-    function setupZoomUI() {
-      if (capsCache && capsCache.zoom) {
-        zoomSlider.disabled = false;
-        zoomSlider.min = capsCache.zoom.min ?? 1;
-        zoomSlider.max = capsCache.zoom.max ?? 4;
-        zoomSlider.step = capsCache.zoom.step ?? 0.1;
-
-        const init = Math.max(Number(zoomSlider.min),
-                      Math.min(Number(zoomSlider.max), DEFAULT_ZOOM));
-        zoomSlider.value = init;
-        zoomVal.textContent = `${init.toFixed(1)}×`;
-        // apply initial zoom
-        runningTrack.applyConstraints({ advanced: [{ zoom: init }] }).catch(() => {});
-      } else {
-        zoomSlider.disabled = true;
-        zoomSlider.value = 1;
-        zoomVal.textContent = "1.0×";
-      }
-    }
-
-    async function stopScanner() {
-      try {
-        if (html5QrCode && html5QrCode.isScanning) {
-          await html5QrCode.stop();
+        // Set focus mode if available (typo fixed: "continuous")
+        if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
+          track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
         }
-      } catch {}
-      runningTrack = null;
-      capsCache = null;
-      stopBtn.disabled = true;
-      startBtn.disabled = false;
-      zoomSlider.disabled = true;
-      zoomSlider.value = 1;
-      zoomVal.textContent = "1.0×";
-    }
 
-    function onScanSuccess(text) {
-      console.log("QR:", text);
-      // If you want to stop after one scan, uncomment:
-      // stopScanner();
-    }
-    function onScanError(_) { /* ignore decode noise */ }
+        if (caps && "zoom" in caps) {
+          // Configure slider from real camera capabilities
+          const min  = typeof caps.zoom.min  === "number" ? caps.zoom.min  : 1;
+          const max  = typeof caps.zoom.max  === "number" ? caps.zoom.max  : 3;
+          const step = typeof caps.zoom.step === "number" ? caps.zoom.step : 0.1;
 
-    // UI events
-    startBtn.addEventListener("click", startBackCamera);
-    stopBtn.addEventListener("click", stopScanner);
-    zoomSlider.addEventListener("input", async (e) => {
-      const z = Number(e.target.value);
-      zoomVal.textContent = `${z.toFixed(1)}×`;
-      try {
-        if (runningTrack && runningTrack.applyConstraints) {
-          await runningTrack.applyConstraints({ advanced: [{ zoom: z }] });
+          slider.min  = String(min);
+          slider.max  = String(max);
+          slider.step = String(step);
+
+          // Start at DEFAULT_ZOOM if within range; otherwise use current setting or min
+          const start = clamp(
+            typeof settings.zoom === "number" ? settings.zoom : DEFAULT_ZOOM,
+            min, max
+          );
+          applyZoom(track, start);
+
+          slider.value = String(start);
+          label.textContent = `×${Number(slider.value).toFixed(1)}`;
+          zoomUI.style.display = "block";
+
+          slider.addEventListener("input", () => {
+            const z = Number(slider.value);
+            applyZoom(track, z, label);
+          });
+
+          minus.addEventListener("click", () => {
+            const z = clamp(Number(slider.value) - step, min, max);
+            slider.value = String(z);
+            applyZoom(track, z, label);
+          });
+
+          plus.addEventListener("click", () => {
+            const z = clamp(Number(slider.value) + step, min, max);
+            slider.value = String(z);
+            applyZoom(track, z, label);
+          });
+        } else {
+          console.warn("Camera zoom not supported on this device.");
+          zoomUI.style.display = "none";
         }
-      } catch {}
-    });
-  </script>
+      };
+
+      tryInit();
+    }
+
+    function getRunningVideoTrack() {
+      // Html5QrcodeScanner doesn’t publicize the element, but it creates a <video> inside the region.
+      const region = document.getElementById("reader__scan_region");
+      const video = region ? region.querySelector("video") : null;
+      const stream = video && video.srcObject ? video.srcObject : null;
+      const tracks = stream ? stream.getVideoTracks() : [];
+      return tracks.length ? tracks[0] : null;
+    }
+
+    function applyZoom(track, value, labelEl) {
+      track.applyConstraints({ advanced: [{ zoom: value }] })
+        .then(() => { if (labelEl) labelEl.textContent = `×${value.toFixed(1)}`; })
+        .catch(err => console.warn("Zoom apply failed:", err));
+    }
+
+    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+
+        function fetchProductData(qrLink) {
+            Papa.parse("products.csv", {
+                download: true,
+                header: true,
+                complete: function(results) {
+                    const rows = results.data;
+                    const product = rows.find(row => row.link === qrLink);
+                    if (product) {
+                        document.getElementById("name-tr").innerText = product.name_tr;
+                        const price = (parseFloat(product.price) * 1.2).toFixed(2); // Add tax to price
+                        document.getElementById("price").innerText = `₺${price}`;
+                        document.getElementById("model").innerText = product.model;
+                        document.getElementById("product-image").src = product.image;
+                        document.getElementById("product-link").style.display = "inline-block";
+                        document.getElementById("sold-button").style.display = "inline-block";
+                        document.getElementById("product-link").setAttribute("data-link", product.link);
+                    } else {
+                        document.getElementById("name-tr").innerText = "[Ürün bulunamadı]";
+                        document.getElementById("price").innerText = "[Ürün bulunamadı]";
+                        document.getElementById("model").innerText = "[Ürün bulunamadı]";
+                        document.getElementById("product-image").src = "placeholder.jpg";
+                        document.getElementById("product-link").style.display = "none";
+                        document.getElementById("sold-button").style.display = "none";
+                    }
+                }
+            });
+        }
+
+        function goToProduct() {
+            const link = document.getElementById("product-link").getAttribute("data-link");
+            if (link) {
+                window.location.href = link;
+            }
+        }
+
+        function markAsSold() {
+            const productName = document.getElementById("name-tr").innerText;
+            const productPrice = document.getElementById("price").innerText;
+            const productModel = document.getElementById("model").innerText;
+
+            const message = `Başlık: ${productName}\n` +
+                            `Fiyat: ${productPrice}\n` +
+                            `Stok Kodu: ${productModel}` +
+                            `Ürün Satıldı!\n\n`;
+
+            // Send message via Telegram API
+            fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    chat_id: TELEGRAM_CHAT_ID,
+                    text: message
+                })
+            })
+            .then(response => {
+                if (response.ok) {
+                    alert("Telegram mesajı başarıyla gönderildi!");
+                } else {
+                    alert("Telegram mesajı gönderilemedi.");
+                }
+            })
+            .catch(error => console.error("Telegram API hatası:", error));
+        }
+
+        function rescan() {
+            html5QrcodeScanner.clear();
+            html5QrcodeScanner.render(onScanSuccess);
+            document.getElementById("name-tr").innerText = "[Henüz taranmadı.]";
+            document.getElementById("price").innerText = "[Henüz taranmadı.]";
+            document.getElementById("model").innerText = "[Henüz taranmadı.]";
+            document.getElementById("product-image").src = "placeholder.jpg";
+            document.getElementById("product-link").style.display = "none";
+            document.getElementById("sold-button").style.display = "none";
+        }
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        #info {
+            width: 300px;
+            border: 1px solid #ccc;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            text-align: center;
+            background-color: #f9f9f9;
+        }
+
+        #info img {
+            max-width: 100%;
+            margin: 10px auto;
+            display: block;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            font-weight: bold;
+            color: #333;
+            background-color: #e9ecef; /* Light gray background for headers */
+        }
+
+        tr:nth-child(odd) {
+            background-color: #f2f2f2; /* Light gray for odd rows */
+        }
+
+        tr:nth-child(even) {
+            background-color: #ffffff; /* White for even rows */
+        }
+
+        tr:hover {
+            background-color: #d1ecf1; /* Light blue on hover */
+            transition: background-color 0.3s;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
 </body>
 </html>
