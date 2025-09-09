@@ -92,336 +92,269 @@
   </div>
 
   <script>
-    // =================== CONFIG ===================
-    const TELEGRAM_BACKEND_ENDPOINT = ""; // e.g. "/api/sold" — keep empty to disable
-    const SCAN_FPS = 12;
-    const QRBOX_SIZE = 320;
-    const DEFAULT_ZOOM = 2;
-    // ==============================================
+  // ===== CONFIG =====
+  const TELEGRAM_BACKEND_ENDPOINT = "";
+  const SCAN_FPS = 12;
+  const QRBOX_SIZE = 360;         // a bit larger so the code fills the box
+  const DEFAULT_ZOOM = 3.5;       // start close to your max (4)
+  const REQUESTED_WIDTH = 1920;   // ask for higher resolution
+  const REQUESTED_HEIGHT = 1080;  // (browser may give closest match)
+  // ===================
 
-    let html5QrCode = null;
-    let runningCameraId = null;
-    let runningTrack = null;
-    let capsCache = null;
-    let torchOn = false;
+  let html5QrCode = null;
+  let runningCameraId = null;
+  let runningTrack = null;
+  let capsCache = null;
+  let torchOn = false;
 
-    const el = (id) => document.getElementById(id);
-    const cameraSelect = el("cameraSelect");
-    const startBtn = el("startBtn");
-    const stopBtn = el("stopBtn");
-    const zoomSlider = el("zoomSlider");
-    const zoomLabel = el("zoomLabel");
-    const zoomVal = el("zoomVal");
-    const torchBtn = el("torchBtn");
-    const focusBtn = el("focusBtn");
-    const debugBox = el("debugBox");
+  const el = (id) => document.getElementById(id);
+  const cameraSelect = el("cameraSelect");
+  const startBtn = el("startBtn");
+  const stopBtn = el("stopBtn");
+  const zoomSlider = el("zoomSlider");
+  const zoomVal = el("zoomVal");
+  const torchBtn = el("torchBtn");  // will stay hidden if unsupported
+  const focusBtn = el("focusBtn");  // will be a soft “nudge” only
+  const debugBox = document.getElementById("debugBox");
 
-    function logDebug(objOrMsg) {
-      const t = new Date().toLocaleTimeString();
-      if (typeof objOrMsg === "string") {
-        debugBox.textContent += `\n[${t}] ${objOrMsg}`;
-      } else {
-        debugBox.textContent += `\n[${t}] ` + JSON.stringify(objOrMsg, null, 2);
-      }
-      debugBox.scrollTop = debugBox.scrollHeight;
-    }
+  function logDebug(msg) {
+    const t = new Date().toLocaleTimeString();
+    debugBox && (debugBox.textContent += `\n[${t}] ${typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2)}`);
+    debugBox && (debugBox.scrollTop = debugBox.scrollHeight);
+  }
 
-    async function listCameras() {
-      const cams = await Html5Qrcode.getCameras();
-      cameraSelect.innerHTML = "";
-      cams.forEach((c, i) => {
-        const opt = document.createElement("option");
-        opt.value = c.id;
-        opt.textContent = c.label || `Kamera ${i+1}`;
-        cameraSelect.appendChild(opt);
-      });
-      let preferred = cams.find(c => /back|rear|environment/i.test(c.label)) || cams[cams.length - 1] || cams[0];
-      if (preferred) cameraSelect.value = preferred.id;
-      logDebug({ cameras: cams });
-    }
-
-    // Try to get the current video track (two strategies)
-    function resolveVideoTrack() {
-      // 1) from html5-qrcode (if available)
-      if (html5QrCode && typeof html5QrCode.getRunningTrack === "function") {
-        const tr = html5QrCode.getRunningTrack();
-        if (tr) return tr;
-      }
-      // 2) from the <video> element
-      const video = document.querySelector("#reader__scan_region video");
-      if (video && video.srcObject) {
-        const tracks = video.srcObject.getVideoTracks();
-        if (tracks && tracks.length) return tracks[0];
-      }
-      return null;
-    }
-
-    async function startScanner() {
-      try {
-        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader__scan_region");
-        runningCameraId = cameraSelect.value;
-
-        await html5QrCode.start(
-          { deviceId: { exact: runningCameraId } },
-          { fps: SCAN_FPS, qrbox: QRBOX_SIZE, aspectRatio: 1.7778 },
-          onScanSuccess,
-          onScanError
-        );
-
-        // Give the video element a brief moment to attach
-        await new Promise(r => setTimeout(r, 150));
-
-        runningTrack = resolveVideoTrack();
-        if (!runningTrack) {
-          logDebug("⚠️ Video track bulunamadı. Zoom/odak çalışmaz.");
-        } else {
-          const settings = runningTrack.getSettings ? runningTrack.getSettings() : {};
-          const caps = runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
-          capsCache = caps;
-          logDebug({ settings, capabilities: caps });
-
-          // Zoom UI
-          if (caps && caps.zoom) {
-            zoomSlider.disabled = false;
-            zoomSlider.min = caps.zoom.min ?? 1;
-            zoomSlider.max = caps.zoom.max ?? 3;
-            zoomSlider.step = caps.zoom.step ?? 0.1;
-            const initZoom = Math.max(zoomSlider.min, Math.min(zoomSlider.max, DEFAULT_ZOOM));
-            zoomSlider.value = initZoom;
-            zoomVal.textContent = `${Number(zoomSlider.value).toFixed(1)}x`;
-            try {
-              await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
-              logDebug(`Zoom set to ${zoomSlider.value}`);
-            } catch (e) {
-              logDebug(`Zoom apply failed: ${e.message || e}`);
-              zoomSlider.disabled = true;
-            }
-          } else {
-            zoomSlider.disabled = true;
-            logDebug("Zoom capability yok (caps.zoom bulunamadı).");
-          }
-
-          // Continuous focus
-          if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
-            try {
-              await applyConstraints({ advanced: [{ focusMode: "continuous" }] });
-              logDebug("focusMode: continuous uygulandı.");
-            } catch { logDebug("focusMode continuous uygulanamadı."); }
-          }
-
-          // Torch
-          if (caps && caps.torch) {
-            torchBtn.style.display = "inline-block";
-            torchOn = false;
-            torchBtn.textContent = "Flaş Aç";
-          } else {
-            torchBtn.style.display = "none";
-            logDebug("Torch capability yok.");
-          }
-        }
-
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-      } catch (err) {
-        console.error(err);
-        logDebug(`Start error: ${err.message || err}`);
-        alert("Kamera başlatılamadı. İzinleri ve başka bir uygulamanın kamerayı kullanmadığını kontrol edin. Siteyi HTTPS üzerinden açın.");
-      }
-    }
-
-    async function stopScanner() {
-      try {
-        if (html5QrCode && html5QrCode.isScanning) {
-          await html5QrCode.stop();
-        }
-        runningTrack = null;
-        capsCache = null;
-        torchOn = false;
-      } catch (e) {
-        logDebug(`Stop error: ${e.message || e}`);
-      } finally {
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-      }
-    }
-
-    function onScanSuccess(qrText) {
-      logDebug({ scanned: qrText });
-      stopScanner();
-      fetchProductData(qrText);
-    }
-    function onScanError(_) { /* noisy decode errors */ }
-
-    async function applyConstraints(constraints) {
-      if (runningTrack && runningTrack.applyConstraints) {
-        await runningTrack.applyConstraints(constraints);
-      } else {
-        throw new Error("applyConstraints desteklenmiyor (track yok).");
-      }
-    }
-
-    // Focus Center with fallbacks
-    async function focusCenter() {
-      if (!runningTrack) { logDebug("Focus failed: track yok."); return; }
-      const caps = capsCache || (runningTrack.getCapabilities ? runningTrack.getCapabilities() : null);
-      logDebug("Focus center attempt…");
-
-      try {
-        // 1) pointsOfInterest
-        if (caps && "pointsOfInterest" in caps) {
-          await applyConstraints({ advanced: [{ pointsOfInterest: [{ x: 0.5, y: 0.5 }] }] });
-          logDebug("pointsOfInterest (0.5,0.5) uygulandı.");
-          // force a refocus pulse if available
-          if (caps.focusMode && caps.focusMode.includes("single-shot")) {
-            await applyConstraints({ advanced: [{ focusMode: "single-shot" }] }).catch(()=>{});
-            logDebug("focusMode: single-shot pulse.");
-            if (caps.focusMode.includes("continuous")) {
-              await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
-              logDebug("focusMode: continuous geri yüklendi.");
-            }
-          }
-          return;
-        }
-        // 2) single-shot pulse
-        if (caps && caps.focusMode && caps.focusMode.includes("single-shot")) {
-          await applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
-          logDebug("focusMode: single-shot uygulandı.");
-          if (caps.focusMode.includes("continuous")) {
-            await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
-            logDebug("focusMode: continuous geri yüklendi.");
-          }
-          return;
-        }
-        // 3) fallback: re-apply continuous
-        if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
-          await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
-          logDebug("focusMode: continuous tekrar uygulandı (fallback).");
-          return;
-        }
-        logDebug("Odak desteği yok (pointsOfInterest / single-shot / continuous yok).");
-      } catch (e) {
-        logDebug(`Focus error: ${e.message || e}`);
-      }
-    }
-
-    // UI events
-    startBtn.addEventListener("click", startScanner);
-    stopBtn.addEventListener("click", stopScanner);
-    zoomSlider.addEventListener("input", async (e) => {
-      zoomVal.textContent = `${Number(e.target.value).toFixed(1)}x`;
-      try {
-        await applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] });
-      } catch (err) {
-        logDebug(`Zoom change failed: ${err.message || err}`);
-      }
+  async function listCameras() {
+    const cams = await Html5Qrcode.getCameras();
+    cameraSelect.innerHTML = "";
+    cams.forEach((c, i) => {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.label || `Kamera ${i+1}`;
+      cameraSelect.appendChild(opt);
     });
-    torchBtn.addEventListener("click", async () => {
-      const caps = capsCache;
-      if (!(caps && caps.torch)) return;
-      try {
-        torchOn = !torchOn;
-        await applyConstraints({ advanced: [{ torch: torchOn }] });
-        torchBtn.textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
-        logDebug(`Torch: ${torchOn ? "ON" : "OFF"}`);
-      } catch (e) {
-        torchOn = !torchOn; // revert
-        logDebug(`Torch failed: ${e.message || e}`);
-      }
-    });
-    focusBtn.addEventListener("click", focusCenter);
+    // prefer back/telephoto/macro if label hints exist
+    let preferred =
+      cams.find(c => /tele|macro/i.test(c.label)) ||
+      cams.find(c => /back|rear|environment/i.test(c.label)) ||
+      cams[cams.length - 1] || cams[0];
+    if (preferred) cameraSelect.value = preferred.id;
+    logDebug({ cameras: cams });
+  }
 
-    // CSV lookup
-    function fetchProductData(qrLink) {
-      Papa.parse("products.csv", {
-        download: true,
-        header: true,
-        complete: function(results) {
-          const rows = results.data || [];
-          const norm = (s) => (s || "").trim();
-          const product = rows.find(row => norm(row.link) === norm(qrLink));
-          if (product) {
-            el("name-tr").innerText = product.name_tr || "-";
-            const price = Number(product.price);
-            const taxed = isFinite(price) ? (price * 1.20).toFixed(2) : "-";
-            el("price").innerText = taxed === "-" ? "-" : `₺${taxed}`;
-            el("model").innerText = product.model || "-";
-            el("product-image").src = product.image || "placeholder.jpg";
-            el("product-link").style.display = "inline-block";
-            el("sold-button").style.display = "inline-block";
-            el("product-link").setAttribute("data-link", product.link || "");
-          } else {
-            resetInfo();
-            alert("Ürün bulunamadı.");
+  function resolveVideoTrack() {
+    if (html5QrCode && typeof html5QrCode.getRunningTrack === "function") {
+      const tr = html5QrCode.getRunningTrack();
+      if (tr) return tr;
+    }
+    const video = document.querySelector("#reader__scan_region video");
+    if (video && video.srcObject) {
+      const tracks = video.srcObject.getVideoTracks();
+      if (tracks && tracks.length) return tracks[0];
+    }
+    return null;
+  }
+
+  async function startScanner() {
+    try {
+      if (!html5QrCode) html5QrCode = new Html5Qrcode("reader__scan_region");
+      runningCameraId = cameraSelect.value;
+
+      await html5QrCode.start(
+        { deviceId: { exact: runningCameraId } },
+        {
+          fps: SCAN_FPS,
+          qrbox: QRBOX_SIZE,
+          aspectRatio: 1.7778,
+          // ask browser for higher resolution; it may give nearest it can
+          videoConstraints: {
+            width: { ideal: REQUESTED_WIDTH },
+            height: { ideal: REQUESTED_HEIGHT }
           }
         },
-        error: function(err) {
-          console.error("CSV hatası:", err);
-          alert("Ürün listesini (products.csv) yükleyemedik.");
+        onScanSuccess,
+        onScanError
+      );
+
+      await new Promise(r => setTimeout(r, 150));
+      runningTrack = resolveVideoTrack();
+      if (!runningTrack) { logDebug("⚠️ video track yok"); return; }
+
+      const caps = runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
+      capsCache = caps;
+      logDebug({ capabilities: caps });
+
+      // Zoom: your device supports up to ~4 — enable slider & default high
+      if (caps && caps.zoom) {
+        zoomSlider.disabled = false;
+        zoomSlider.min = caps.zoom.min ?? 1;
+        zoomSlider.max = caps.zoom.max ?? 4;     // your debug said 4
+        zoomSlider.step = caps.zoom.step ?? 0.1;
+        const initZoom = Math.max(zoomSlider.min, Math.min(zoomSlider.max, DEFAULT_ZOOM));
+        zoomSlider.value = initZoom;
+        zoomVal.textContent = `${Number(zoomSlider.value).toFixed(1)}x`;
+        try {
+          await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
+          logDebug(`zoom=${zoomSlider.value}`);
+        } catch (e) { logDebug(`zoom apply fail: ${e}`); }
+      } else {
+        zoomSlider.disabled = true;
+      }
+
+      // no torch/focus on your device — buttons will do nothing if unsupported
+      if (!(caps && caps.torch)) torchBtn.style.display = "none";
+
+      // enable pinch-to-zoom mapped to the slider
+      enablePinchToZoom();
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    } catch (err) {
+      logDebug(`start error: ${err.message || err}`);
+      alert("Kamera başlatılamadı. HTTPS ve izinleri kontrol edin.");
+    }
+  }
+
+  async function stopScanner() {
+    try {
+      if (html5QrCode && html5QrCode.isScanning) await html5QrCode.stop();
+    } catch (e) { logDebug(`stop error: ${e}`); }
+    runningTrack = null; capsCache = null; startBtn.disabled = false; stopBtn.disabled = true;
+  }
+
+  function onScanSuccess(qrText) {
+    logDebug({ scanned: qrText });
+    stopScanner();
+    fetchProductData(qrText);
+  }
+  function onScanError(_) {}
+
+  async function applyConstraints(constraints) {
+    if (runningTrack && runningTrack.applyConstraints) {
+      await runningTrack.applyConstraints(constraints);
+    } else {
+      throw new Error("applyConstraints yok");
+    }
+  }
+
+  // pinch gestures -> zoom slider
+  function enablePinchToZoom() {
+    const container = document.getElementById("videoWrap");
+    let startDist = null;
+    let startZoom = null;
+
+    container.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 2) {
+        startDist = Math.hypot(
+          e.touches[0].pageX - e.touches[1].pageX,
+          e.touches[0].pageY - e.touches[1].pageY
+        );
+        startZoom = Number(zoomSlider.value);
+      }
+    }, { passive: true });
+
+    container.addEventListener("touchmove", async (e) => {
+      if (e.touches.length === 2 && startDist && startZoom != null && !zoomSlider.disabled) {
+        const dist = Math.hypot(
+          e.touches[0].pageX - e.touches[1].pageX,
+          e.touches[0].pageY - e.touches[1].pageY
+        );
+        const delta = (dist - startDist) / 200; // sensitivity
+        let newZoom = Math.max(Number(zoomSlider.min), Math.min(Number(zoomSlider.max), startZoom + delta));
+        if (Math.abs(newZoom - Number(zoomSlider.value)) >= 0.05) {
+          zoomSlider.value = newZoom;
+          zoomVal.textContent = `${newZoom.toFixed(1)}x`;
+          try { await applyConstraints({ advanced: [{ zoom: newZoom }] }); } catch {}
         }
-      });
-    }
-
-    function goToProduct() {
-      const link = el("product-link").getAttribute("data-link");
-      if (link) window.location.href = link;
-    }
-
-    async function markAsSold() {
-      const productName = el("name-tr").innerText;
-      const productPrice = el("price").innerText;
-      const productModel = el("model").innerText;
-
-      const message =
-        `Başlık: ${productName}\n` +
-        `Fiyat: ${productPrice}\n` +
-        `Stok Kodu: ${productModel}\n` +
-        `Ürün Satıldı!\n`;
-
-      if (!TELEGRAM_BACKEND_ENDPOINT) {
-        alert("Telegram gönderimi devre dışı (backend endpoint tanımlı değil).");
-        return;
       }
-      try {
-        const res = await fetch(TELEGRAM_BACKEND_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: message })
-        });
-        alert(res.ok ? "Telegram mesajı gönderildi." : "Telegram mesajı gönderilemedi.");
-      } catch (e) {
-        alert("Telegram servisine bağlanırken hata oluştu.");
-      }
+    }, { passive: true });
+
+    container.addEventListener("touchend", () => {
+      startDist = null; startZoom = null;
+    });
+  }
+
+  // UI events
+  document.getElementById("startBtn").addEventListener("click", startScanner);
+  document.getElementById("stopBtn").addEventListener("click", stopScanner);
+  document.getElementById("zoomSlider").addEventListener("input", async (e) => {
+    const z = Number(e.target.value);
+    zoomVal.textContent = `${z.toFixed(1)}x`;
+    try { await applyConstraints({ advanced: [{ zoom: z }] }); } catch (err) { logDebug(`zoom change fail: ${err}`); }
+  });
+  document.getElementById("torchBtn").addEventListener("click", async () => {
+    // most likely hidden for you; kept for devices that do support it
+    if (!(capsCache && capsCache.torch)) return;
+    try {
+      torchOn = !torchOn;
+      await applyConstraints({ advanced: [{ torch: torchOn }] });
+      document.getElementById("torchBtn").textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
+    } catch {}
+  });
+  document.getElementById("focusBtn").addEventListener("click", async () => {
+    // your device reports no focus controls; this is a soft nudge only
+    if (capsCache && capsCache.focusMode && capsCache.focusMode.includes("continuous")) {
+      try { await applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch {}
     }
+    // else: nothing more we can do from web if no capability is exposed
+    logDebug("Focus: cihaz web odak kontrolü sunmuyor.");
+  });
 
-    function resetInfo() {
-      el("name-tr").innerText = "[Henüz taranmadı.]";
-      el("price").innerText = "[Henüz taranmadı.]";
-      el("model").innerText = "[Henüz taranmadı.]";
-      el("product-image").src = "placeholder.jpg";
-      el("product-link").style.display = "none";
-      el("sold-button").style.display = "none";
-    }
+  // products / telegram (same as before)
+  function fetchProductData(qrLink) {
+    Papa.parse("products.csv", {
+      download: true, header: true,
+      complete: function(results) {
+        const rows = results.data || [];
+        const norm = (s) => (s || "").trim();
+        const product = rows.find(row => norm(row.link) === norm(qrLink));
+        if (product) {
+          document.getElementById("name-tr").innerText = product.name_tr || "-";
+          const price = Number(product.price);
+          const taxed = isFinite(price) ? (price * 1.20).toFixed(2) : "-";
+          document.getElementById("price").innerText = taxed === "-" ? "-" : `₺${taxed}`;
+          document.getElementById("model").innerText = product.model || "-";
+          document.getElementById("product-image").src = product.image || "placeholder.jpg";
+          document.getElementById("product-link").style.display = "inline-block";
+          document.getElementById("sold-button").style.display = "inline-block";
+          document.getElementById("product-link").setAttribute("data-link", product.link || "");
+        } else {
+          resetInfo(); alert("Ürün bulunamadı.");
+        }
+      },
+      error: function(err) { alert("products.csv yüklenemedi."); }
+    });
+  }
+  function resetInfo() {
+    document.getElementById("name-tr").innerText = "[Henüz taranmadı.]";
+    document.getElementById("price").innerText = "[Henüz taranmadı.]";
+    document.getElementById("model").innerText = "[Henüz taranmadı.]";
+    document.getElementById("product-image").src = "placeholder.jpg";
+    document.getElementById("product-link").style.display = "none";
+    document.getElementById("sold-button").style.display = "none";
+  }
+  function goToProduct(){ const link = document.getElementById("product-link").getAttribute("data-link"); if (link) location.href = link; }
+  async function markAsSold(){
+    if (!TELEGRAM_BACKEND_ENDPOINT) return alert("Telegram gönderimi devre dışı.");
+    const msg = `Başlık: ${document.getElementById("name-tr").innerText}\nFiyat: ${document.getElementById("price").innerText}\nStok Kodu: ${document.getElementById("model").innerText}\nÜrün Satıldı!\n`;
+    try {
+      const res = await fetch(TELEGRAM_BACKEND_ENDPOINT, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ text: msg })});
+      alert(res.ok ? "Telegram mesajı gönderildi." : "Telegram mesajı gönderilemedi.");
+    } catch { alert("Telegram servisine bağlanırken hata oluştu."); }
+  }
+  async function rescan(){ resetInfo(); await stopScanner(); await startScanner(); }
 
-    async function rescan() {
-      resetInfo();
-      await stopScanner();
-      await startScanner();
-    }
+  // init
+  (async () => {
+    try { await listCameras(); logDebug("Hazır. Başlat'a basın."); }
+    catch (e){ logDebug(`camera list err: ${e}`); alert("Kameralar listelenemedi."); }
+  })();
 
-    // Init
-    (async () => {
-      try { await listCameras(); logDebug("Hazır. Başlat'a basın."); }
-      catch (e) {
-        console.error(e);
-        logDebug(`Camera list error: ${e.message || e}`);
-        alert("Kameralar listelenemedi. İzinleri kontrol edin.");
-      }
-    })();
+  // expose for inline
+  window.goToProduct = goToProduct;
+  window.markAsSold = markAsSold;
+  window.rescan = rescan;
+</script>
 
-    // Expose for inline onclicks
-    window.goToProduct = goToProduct;
-    window.markAsSold = markAsSold;
-    window.rescan = rescan;
-  </script>
 </body>
 </html>
+
