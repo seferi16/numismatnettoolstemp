@@ -148,11 +148,10 @@
   <script type="module">
   // ================== CONFIG ==================
   // SECURITY: In production, never expose your Telegram token in client code.
-  // Put it behind a server endpoint.
   const TELEGRAM_BOT_TOKEN = '5191762597:AAH6kIJsjfuX6DIbbsfskSrBiNTQI5v8bSk';
   const TELEGRAM_CHAT_ID   = '423739694';
-  const CSV_FILE           = 'products.csv'; // same-origin
-  const TAX_RATE           = 0.20;           // %20 KDV
+  const CSV_FILE           = 'products.csv';
+  const TAX_RATE           = 0.20;
 
   // ====== DOM refs ======
   const $ = id => document.getElementById(id);
@@ -167,8 +166,7 @@
 
   // Scanner UI
   const video     = $("video");
-  const selCamera = $("camera");
-  const selRes    = $("resolution");
+  const selRes    = $("resolution");   // keep resolution selector
   const chkTorch  = $("torch");
   const rngZoom   = $("zoom");
   const lblZoom   = $("zoomLabel");
@@ -178,6 +176,10 @@
   const btnStop   = $("stop");
   const resultBox = $("result");
   const failBox   = $("fail");
+
+  // If your layout still has a <select id="camera">, hide it:
+  const selCamera = document.getElementById("camera");
+  if (selCamera) selCamera.style.display = "none";
 
   // ====== State ======
   let stream = null;
@@ -271,7 +273,7 @@
     await start();
   };
 
-  // ====== Scanner helpers ======
+  // ====== Helpers ======
   function parseRes(v) { const [w,h] = v.split("x").map(Number); return {w,h}; }
   function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
@@ -311,10 +313,7 @@
     if (zxingReader?.reset) { try { zxingReader.reset(); } catch {} }
     zxingCtrl = null; zxingReader = null;
 
-    if (stream) {
-      for (const t of stream.getTracks()) t.stop();
-      stream = null;
-    }
+    if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; }
     currentTrack = null;
   }
 
@@ -334,37 +333,27 @@
     try { await currentTrack.applyConstraints({ advanced: [{ zoom: value }] }); } catch {}
   }
 
-  // ====== Camera selection that actually sticks ======
-  async function primePermissionsAndListCameras() {
-    // Open a tiny temp stream so labels appear
+  // ====== Force "camera 0" that is back-facing (or fallback to first) ======
+  async function primeAndPickBackCamera() {
+    // Open temp stream so device labels are available
     let temp = null;
-    try {
-      temp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    } catch (e) {
-      // user may block; we'll still try to list devices
-    }
-    await listCameras();
-    try { temp && temp.getTracks().forEach(t => t.stop()); } catch {}
-  }
+    try { temp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+    catch { /* user may block; continue anyway */ }
 
-  async function listCameras() {
     const devices = await navigator.mediaDevices.enumerateDevices();
+    try { temp && temp.getTracks().forEach(t => t.stop()); } catch {}
+
     const videos = devices.filter(d => d.kind === "videoinput");
 
-    const isBack = (s) => /back|rear|environment|arka|задн|trasera|后置|背面/i.test(s || "");
+    // Prefer labels that look like back/rear/environment
+    const isBack = (s) => /back|rear|environment|arka|trasera|задн|后置|背面/i.test(s || "");
 
-    videos.sort((a, b) => (isBack(a.label) ? 0 : 1) - (isBack(b.label) ? 0 : 1));
-
-    selCamera.innerHTML = "";
-    for (const d of videos) {
-      const opt = document.createElement("option");
-      opt.value = d.deviceId;
-      opt.textContent = d.label || `Kamera ${selCamera.length + 1}`;
-      selCamera.appendChild(opt);
-    }
-
+    // 1) Try first back-looking camera
     const back = videos.find(d => isBack(d.label));
-    if (back) selCamera.value = back.deviceId;
+    if (back) return back.deviceId;
+
+    // 2) Fallback: the first camera in list (often "0")
+    return videos[0]?.deviceId;
   }
 
   async function ensureEnvironmentFacing(stream, preferredDeviceId) {
@@ -383,7 +372,7 @@
       } catch {}
     }
 
-    // Last resort
+    // Last resort: force environment exact
     return await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { exact: "environment" } }, audio: false
     });
@@ -396,20 +385,18 @@
     resetProductUI();
     clearScanResult();
 
-    // Make sure cameras are labeled/filled
-    try { await primePermissionsAndListCameras(); } catch {}
+    // pick "camera 0" back-facing (or first device)
+    const chosenDeviceId = await primeAndPickBackCamera();
 
     // Desired resolution
     const { w,h } = parseRes(selRes.value);
-    const desiredDeviceId = selCamera.value || undefined;
 
-    // First attempt: favor deviceId EXACT, do not also pass facingMode
+    // First attempt: deviceId EXACT only (no facingMode conflict)
     let streamCandidate;
     try {
       streamCandidate = await navigator.mediaDevices.getUserMedia({
         video: {
-          ...(desiredDeviceId ? { deviceId: { exact: desiredDeviceId } }
-                               : { facingMode: { ideal: "environment" } }),
+          ...(chosenDeviceId ? { deviceId: { exact: chosenDeviceId } } : { facingMode: { ideal: "environment" } }),
           width: { ideal: w }, height: { ideal: h },
           advanced: [{ focusMode: "continuous" }, { exposureMode: "continuous" }]
         },
@@ -420,8 +407,8 @@
       streamCandidate = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
 
-    // Verify facing; retry if needed
-    stream = await ensureEnvironmentFacing(streamCandidate, desiredDeviceId);
+    // Verify facing; retry if still front
+    stream = await ensureEnvironmentFacing(streamCandidate, chosenDeviceId);
 
     // Attach and continue
     video.srcObject = stream;
@@ -461,16 +448,13 @@
       delayBetweenScanSuccess: 180
     });
 
-    const chosenId = currentTrack?.getSettings?.().deviceId || selCamera.value || undefined;
+    const chosenId = currentTrack?.getSettings?.().deviceId || chosenDeviceId;
 
     zxingCtrl = await zxingReader.decodeFromVideoDevice(
       chosenId,
       video,
       (result, err) => {
-        if (result) {
-          const txt = result.getText();
-          onScanSuccess(txt);
-        }
+        if (result) onScanSuccess(result.getText());
       }
     );
 
@@ -493,10 +477,7 @@
           const box = code.boundingBox;
           if (!raw || !box) continue;
           const cx = box.x + box.width/2, cy = box.y + box.height/2;
-          if (cx>=x0 && cx<=x1 && cy>=y0 && cy<=y1) {
-            onScanSuccess(raw);
-            return;
-          }
+          if (cx>=x0 && cx<=x1 && cy>=y0 && cy<=y1) { onScanSuccess(raw); return; }
         }
         showFailHint(true);
       } else {
@@ -522,15 +503,7 @@
   chkTorch.addEventListener("change", () => applyTorch(chkTorch.checked));
   rngZoom.addEventListener("input", () => applyZoom(rngZoom.value));
 
-  // Prime camera list on load
-  (async () => {
-    try {
-      const temp = await navigator.mediaDevices.getUserMedia({ video: true });
-      temp.getTracks().forEach(t => t.stop());
-    } catch {}
-    try { await listCameras(); } catch {}
-  })();
-
+  // Clean up on leave
   window.addEventListener("pagehide", stopAll);
   window.addEventListener("beforeunload", stopAll);
 </script>
