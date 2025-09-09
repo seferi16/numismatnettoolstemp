@@ -1,78 +1,384 @@
-<script>
-  // Replace Html5QrcodeScanner usage with direct Html5Qrcode
-  const REGION_ID = "reader__scan_region";
-  const html5Qr = new Html5Qrcode(REGION_ID, { verbose: false });
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>En İyi QR Tarayıcı (BarcodeDetector + ZXing Fallback)</title>
+  <style>
+    :root { --accent:#0d6efd; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 0; padding: 16px; background:#f6f7fb; color:#222;
+      display:flex; flex-direction:column; gap:16px; align-items:center;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; text-align:center; }
+    .panel {
+      width: min(480px, 94vw);
+      background: #fff; border:1px solid #e6e6e6; border-radius:12px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.06); padding:12px 12px 16px;
+    }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .row > * { flex: 1 1 auto; }
+    .btn {
+      background: var(--accent); color:#fff; border:0; padding:10px 14px;
+      border-radius:10px; cursor:pointer; font-weight:600;
+      box-shadow: 0 3px 10px rgba(13,110,253,.25);
+    }
+    .btn.secondary { background:#6c757d; box-shadow:none; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    select, input[type="range"] {
+      width:100%; padding:8px; border-radius:8px; border:1px solid #ddd;
+      background:#fff;
+    }
+    label { font-size: 13px; color:#444; }
+    #stage {
+      position: relative; width:100%; aspect-ratio: 1 / 1; background:#000;
+      border-radius:12px; overflow:hidden; margin-top:6px;
+    }
+    video {
+      position:absolute; inset:0;
+      width:100%; height:100%; object-fit:cover; image-rendering: auto;
+    }
+    /* ROI guide (square box) */
+    .roi {
+      position:absolute; inset:10%; border:2px dashed rgba(255,255,255,.85);
+      border-radius:12px; pointer-events:none;
+    }
+    /* Result card */
+    #result {
+      background:#0a3622; color:#d1f2e1; border:1px solid #0f5132; padding:10px;
+      border-radius:8px; display:none; word-break:break-word; font-size:14px;
+    }
+    #fail {
+      background:#fff3cd; color:#664d03; border:1px solid #ffe69c; padding:8px;
+      border-radius:8px; display:none; font-size:12px;
+    }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .grid-3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }
+    .hint { font-size:12px; color:#666; }
+    .switch {
+      display:inline-flex; align-items:center; gap:8px; user-select:none;
+    }
+    .switch input { transform: scale(1.2); }
+  </style>
+</head>
+<body>
+  <h1>QR Tarayıcı (Hızlı & Güvenilir)</h1>
 
-  // Try to use native Shape Detection API if available (Chrome/Android)
-  const experimentalFeatures = { useBarCodeDetectorIfSupported: true };
+  <div class="panel">
+    <div class="row">
+      <label for="camera">Kamera</label>
+      <select id="camera"></select>
+    </div>
 
-  async function startScanner() {
-    // Enumerate cameras and prefer the back one
-    const cams = await Html5Qrcode.getCameras();
-    let camId = cams?.find(c => /back|rear|environment/i.test(c.label))?.id || cams?.[0]?.id;
-    if (!camId) throw new Error("No camera found");
+    <div class="grid">
+      <div>
+        <label for="resolution">Çözünürlük</label>
+        <select id="resolution">
+          <option value="1280x720">1280×720 (HD)</option>
+          <option value="1920x1080" selected>1920×1080 (FHD)</option>
+          <option value="2560x1440">2560×1440 (QHD)</option>
+        </select>
+      </div>
+      <div class="switch" style="align-self:end;">
+        <input id="torch" type="checkbox" />
+        <label for="torch">El Feneri</label>
+      </div>
+    </div>
 
-    const videoConstraints = {
-      deviceId: { exact: camId },
-      facingMode: "environment",
-      width:  { ideal: 1920 },   // try HD+
-      height: { ideal: 1080 },
-      // Some browsers accept advanced constraints
-      advanced: [
-        { focusMode: "continuous" },
-        { exposureMode: "continuous" }
-      ]
-    };
+    <div class="grid">
+      <div>
+        <label for="zoom">Zoom: <span id="zoomLabel">×1.0</span></label>
+        <input id="zoom" type="range" min="1" max="3" step="0.1" value="1" />
+      </div>
+      <div>
+        <label for="roi">ROI Boyutu</label>
+        <select id="roi">
+          <option value="0.7">Geniş (70%)</option>
+          <option value="0.6" selected>Orta (60%)</option>
+          <option value="0.5">Dar (50%)</option>
+        </select>
+      </div>
+    </div>
 
-    const config = {
-      fps: 24,                    // faster than 10
-      qrbox: 280,                 // tighter ROI = bigger QR in box
-      aspectRatio: 1.0,
-      rememberLastUsedCamera: true,
-      formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
-      experimentalFeatures
-    };
+    <div class="row">
+      <button id="start" class="btn">Başlat</button>
+      <button id="stop" class="btn secondary" disabled>Durdur</button>
+    </div>
 
-    await html5Qr.start(
-      { video: videoConstraints },
-      config,
-      onScanSuccess,
-      onScanFailure
-    );
+    <div id="stage">
+      <video id="video" playsinline muted></video>
+      <div class="roi" id="roiBox"></div>
+    </div>
 
-    // Try torch on if available
-    tryTorch(true);
-    // Re-wire your zoom controls to use the new track
-    setupZoomControls(getRunningVideoTrack());
-  }
+    <div id="result"></div>
+    <div id="fail" class="hint">İpucu: Kodu ROI içine yaklaştır, parlamayı azalt, lensi sil ve zoomu kademeli arttır.</div>
 
-  // Call this instead of html5QrcodeScanner.render(...)
-  startScanner().catch(e => console.error(e));
+    <p class="hint">Not: Tarama yolu öncelik sırası → <strong>BarcodeDetector</strong> (varsa) → <strong>ZXing</strong> (fallback). Torch/Zoom cihaz desteğine bağlıdır.</p>
+  </div>
 
-  function onScanSuccess(text) {
-    console.log("QR:", text);
-    html5Qr.stop().then(() => {
-      fetchProductData(text);
-    });
-  }
-  function onScanFailure() { /* ignore frame misses for speed */ }
+  <!-- ZXing will be loaded dynamically only if needed -->
+  <script type="module">
+    // ======= UI elements =======
+    const $ = id => document.getElementById(id);
+    const video = $("video");
+    const selCamera = $("camera");
+    const selRes = $("resolution");
+    const chkTorch = $("torch");
+    const rngZoom = $("zoom");
+    const lblZoom = $("zoomLabel");
+    const selRoi = $("roi");
+    const roiBox = $("roiBox");
+    const btnStart = $("start");
+    const btnStop = $("stop");
+    const resultBox = $("result");
+    const failBox = $("fail");
 
-  function getRunningVideoTrack() {
-    const region = document.getElementById(REGION_ID);
-    const video = region ? region.querySelector("video") : null;
-    const stream = video?.srcObject;
-    const tracks = stream ? stream.getVideoTracks() : [];
-    return tracks[0] || null;
-  }
+    // ======= State =======
+    let stream = null;
+    let usingDetector = false;     // true => BarcodeDetector, false => ZXing
+    let detector = null;           // BarcodeDetector instance
+    let rafId = 0;                 // rAF loop for detector
+    let zxingReader = null;        // ZXing reader
+    let zxingCtrl = null;          // ZXing controls
+    let currentTrack = null;
 
-  async function tryTorch(on) {
-    const track = getRunningVideoTrack();
-    if (!track || !track.getCapabilities) return;
-    const caps = track.getCapabilities();
-    if (!caps.torch) return;
-    try { await track.applyConstraints({ advanced: [{ torch: !!on }] }); }
-    catch (e) { /* torch may fail on some devices */ }
-  }
+    // ======= Helpers =======
+    function parseRes(v) {
+      const [w, h] = v.split("x").map(Number);
+      return { w, h };
+    }
+    function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
-  // Reuse your previous setupZoomControls(track), applyZoom(...), etc.
-</script>
+    async function listCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videos = devices.filter(d => d.kind === "videoinput");
+      selCamera.innerHTML = "";
+      // Prefer back/rear/environment labeled items
+      videos.sort((a,b) => {
+        const score = s => /back|rear|environment/i.test(s.label) ? 0 : 1;
+        return score(a) - score(b);
+      });
+      for (const d of videos) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Kamera ${selCamera.length+1}`;
+        selCamera.appendChild(opt);
+      }
+    }
+
+    function updateRoiBox() {
+      const frac = Number(selRoi.value); // 0.5 ~ 0.7
+      const inset = ((1 - frac) * 100) / 2;
+      roiBox.style.inset = `${inset}%`;
+    }
+
+    function setResult(text) {
+      resultBox.style.display = "block";
+      resultBox.textContent = text;
+    }
+
+    function clearResult() {
+      resultBox.style.display = "none";
+      resultBox.textContent = "";
+    }
+
+    function showFailHint(show) {
+      failBox.style.display = show ? "block" : "none";
+    }
+
+    async function stopAll() {
+      btnStop.disabled = true;
+      btnStart.disabled = false;
+      showFailHint(false);
+      clearResult();
+
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (detector) { detector = null; }
+      if (zxingCtrl && zxingCtrl.stop) {
+        try { await zxingCtrl.stop(); } catch {}
+        zxingCtrl = null;
+      }
+      if (zxingReader && zxingReader.reset) {
+        try { zxingReader.reset(); } catch {}
+      }
+      if (stream) {
+        for (const t of stream.getTracks()) t.stop();
+        stream = null;
+      }
+      currentTrack = null;
+    }
+
+    async function applyTorch(on) {
+      if (!currentTrack?.getCapabilities) return;
+      const caps = currentTrack.getCapabilities();
+      if (!caps.torch) return;
+      try { await currentTrack.applyConstraints({ advanced: [{ torch: !!on }] }); } catch {}
+    }
+
+    async function applyZoom(value) {
+      lblZoom.textContent = `×${Number(value).toFixed(1)}`;
+      if (!currentTrack?.getCapabilities) return;
+      const caps = currentTrack.getCapabilities();
+      if (!("zoom" in caps)) return;
+      value = clamp(Number(value), caps.zoom.min ?? 1, caps.zoom.max ?? 3);
+      try { await currentTrack.applyConstraints({ advanced: [{ zoom: value }] }); } catch {}
+    }
+
+    function trackFromVideo() {
+      const s = video.srcObject;
+      const tracks = s ? s.getVideoTracks() : [];
+      return tracks[0] || null;
+    }
+
+    // ======= Start pipeline =======
+    async function start() {
+      await stopAll();
+      btnStart.disabled = true;
+
+      // camera constraints
+      const { w, h } = parseRes(selRes.value);
+      const deviceId = selCamera.value || undefined;
+      const videoConstraints = deviceId
+        ? { deviceId: { exact: deviceId }, width: { ideal: w }, height: { ideal: h } }
+        : { facingMode: { ideal: "environment" }, width: { ideal: w }, height: { ideal: h } };
+
+      // advanced focus/exposure if available
+      videoConstraints.advanced = [{ focusMode: "continuous" }, { exposureMode: "continuous" }];
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+      } catch (e) {
+        alert("Kamera başlatılamadı: " + e.message);
+        btnStart.disabled = false;
+        return;
+      }
+
+      video.srcObject = stream;
+      await video.play();
+      currentTrack = trackFromVideo();
+
+      // Initialize zoom UI from capabilities
+      try {
+        const caps = currentTrack?.getCapabilities?.();
+        if (caps && "zoom" in caps) {
+          rngZoom.min = String(caps.zoom.min ?? 1);
+          rngZoom.max = String(caps.zoom.max ?? 3);
+          rngZoom.step = String(caps.zoom.step ?? 0.1);
+          rngZoom.value = String(clamp(parseFloat(rngZoom.value) || 1, Number(rngZoom.min), Number(rngZoom.max)));
+          lblZoom.textContent = `×${Number(rngZoom.value).toFixed(1)}`;
+        } else {
+          // hide zoom if unsupported
+          rngZoom.disabled = true;
+          lblZoom.textContent = "×—";
+        }
+      } catch {}
+
+      // Torch initial
+      await applyTorch(chkTorch.checked);
+
+      // Try BarcodeDetector first
+      usingDetector = 'BarcodeDetector' in window;
+      if (usingDetector) {
+        try {
+          detector = new BarcodeDetector({ formats: ['qr_code'] });
+          runDetectorLoop();
+          btnStop.disabled = false;
+          return;
+        } catch (e) {
+          // Some browsers expose BarcodeDetector but throw on instantiation
+          usingDetector = false;
+        }
+      }
+
+      // Fallback to ZXing (@zxing/browser)
+      usingDetector = false;
+      const mod = await import('https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/esm/index.min.js');
+      const { BrowserQRCodeReader, IScannerControls } = mod;
+
+      zxingReader = new BrowserQRCodeReader(undefined, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 180 });
+      // Find the exact deviceId of the running track to keep constraints
+      const settings = currentTrack.getSettings();
+      const chosenId = settings.deviceId || selCamera.value || undefined;
+
+      zxingCtrl = await zxingReader.decodeFromVideoDevice(
+        chosenId,
+        video,
+        (result, err, controls) => {
+          if (result) {
+            setResult(result.getText());
+            stopAll(); // stop after first success; remove if you want continuous
+          }
+        }
+      );
+      btnStop.disabled = false;
+    }
+
+    function runDetectorLoop() {
+      const frac = Number(selRoi.value);
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      if (!w || !h || !detector) {
+        rafId = requestAnimationFrame(runDetectorLoop);
+        return;
+      }
+
+      // Use detect() directly on video — modern Chrome supports this
+      detector.detect(video).then(codes => {
+        if (codes && codes.length) {
+          // Filter by ROI (center square)
+          const inset = ((1 - frac) / 2);
+          const x0 = w * inset, y0 = h * inset, x1 = w * (1 - inset), y1 = h * (1 - inset);
+
+          for (const code of codes) {
+            const raw = code.rawValue || code.rawValue === "" ? code.rawValue : null;
+            const box = code.boundingBox;
+            if (!raw || !box) continue;
+            const cx = box.x + box.width / 2;
+            const cy = box.y + box.height / 2;
+            if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) {
+              setResult(raw);
+              stopAll(); // stop after first success; remove if you want continuous
+              return;
+            }
+          }
+        } else {
+          showFailHint(true);
+        }
+        rafId = requestAnimationFrame(runDetectorLoop);
+      }).catch(() => {
+        // On any error, keep trying
+        rafId = requestAnimationFrame(runDetectorLoop);
+      });
+    }
+
+    // ======= Events =======
+    btnStart.addEventListener("click", start);
+    btnStop.addEventListener("click", stopAll);
+    selRoi.addEventListener("change", updateRoiBox);
+    updateRoiBox();
+
+    chkTorch.addEventListener("change", () => applyTorch(chkTorch.checked));
+    rngZoom.addEventListener("input", () => applyZoom(rngZoom.value));
+
+    // Refresh camera list on load and when permissions change
+    (async () => {
+      try {
+        await listCameras();
+      } catch {}
+      // if none labeled yet, request permission by opening a dummy stream quickly
+      if (!selCamera.options.length) {
+        try {
+          const temp = await navigator.mediaDevices.getUserMedia({ video: true });
+          temp.getTracks().forEach(t => t.stop());
+          await listCameras();
+        } catch {}
+      }
+    })();
+
+    // Stop tracks when leaving page
+    window.addEventListener("pagehide", stopAll);
+    window.addEventListener("beforeunload", stopAll);
+  </script>
+</body>
+</html>
