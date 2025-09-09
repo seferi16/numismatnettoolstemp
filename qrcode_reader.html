@@ -1,221 +1,354 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Numismat.net Ürün Tarayıcı</title>
-    <script src="https://unpkg.com/html5-qrcode"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
-    <style>
-        /* ... your existing styles ... */
-        .btn {
-            padding: 10px 20px;
-            font-size: 16px;
-            margin: 10px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            background-color: #007bff;
-            color: white;
-        }
-        .btn-sold {
-            background-color: #28a745; /* Green color for Sold button */
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Numismat.net Ürün Tarayıcı</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+  <style>
+    :root { --pad: 14px; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:#f4f6f8; color:#111; margin:0; padding:20px;
+      display:flex; flex-direction:column; align-items:center; gap:16px;
+    }
+    h1 { font-size:22px; margin:6px 0 4px; }
+    .wrap { width: min(960px, 95vw); display:grid; grid-template-columns: 360px 1fr; gap:16px; }
+    @media (max-width: 820px) {.wrap{grid-template-columns:1fr}}
+    .card {
+      background:#fff; border:1px solid #e5e7eb; border-radius:10px;
+      box-shadow: 0 3px 10px rgba(0,0,0,.06);
+    }
+    .card > .hd { padding:10px var(--pad); font-weight:600; border-bottom:1px solid #eef1f4; }
+    .card > .bd { padding: var(--pad); }
+
+    #info img { width:100%; border-radius:6px; object-fit:cover; max-height:220px; }
+    table { width:100%; border-collapse: collapse; margin-top:8px; }
+    th, td { padding:8px; text-align:left; }
+    th { width:120px; color:#333; background:#f1f5f9 }
+    tr:nth-child(even) td { background:#fafafa; }
+    tr:hover td { background:#e8f4ff; }
+
+    .btn { padding:10px 14px; font-size:15px; border:none; border-radius:6px; cursor:pointer; color:#fff; background:#2563eb; }
+    .btn:hover { filter:brightness(.95); }
+    .btn.sold { background:#16a34a; }
+    .btn.secondary { background:#6b7280; }
+    .btn.light { background:#111827; color:#fff; }
+    .btn-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+
+    .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .controls label { font-size:14px; color:#374151; }
+    .controls select, .controls input[type="range"] {
+      padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#fff;
+    }
+    #reader__scan_region { width:100%; min-height:380px; }
+    #videoWrap { position:relative; }
+    #videoWrap::after {
+      content:""; position:absolute; inset:0; pointer-events:none;
+      border:2px solid rgba(255,255,255,.6); border-radius:10px;
+      margin: 20px;
+    }
+    .hint { font-size:12px; color:#6b7280; margin-top:6px; }
+  </style>
 </head>
 <body>
+  <h1>Numismat.net Ürün Tarayıcı</h1>
 
-    <h1>Numismat.net Ürün Tarayıcı</h1>
-    
-    <div id="info">
+  <div class="wrap">
+    <!-- Product info card -->
+    <div id="info" class="card">
+      <div class="hd">Ürün Bilgisi</div>
+      <div class="bd">
         <img id="product-image" src="placeholder.jpg" alt="Ürün Görseli">
         <table>
-            <tr><th>Başlık:</th><td id="name-tr">[Henüz taranmadı.]</td></tr>
-            <tr><th>Fiyat:</th><td id="price">[Henüz taranmadı.]</td></tr>
-            <tr><th>Stok Kodu:</th><td id="model">[Henüz taranmadı.]</td></tr>
+          <tr><th>Başlık</th><td id="name-tr">[Henüz taranmadı.]</td></tr>
+          <tr><th>Fiyat</th><td id="price">[Henüz taranmadı.]</td></tr>
+          <tr><th>Stok Kodu</th><td id="model">[Henüz taranmadı.]</td></tr>
         </table>
-        <button id="product-link" class="btn" onclick="goToProduct()" style="display:none;">Ürüne Git</button>
-        <button id="sold-button" class="btn btn-sold" onclick="markAsSold()" style="display:none;">Ürün Satıldı</button>
-        <button id="rescan-button" class="btn" onclick="rescan()">Yeniden Tara</button>
+        <div class="btn-row">
+          <button id="product-link" class="btn" onclick="goToProduct()" style="display:none;">Ürüne Git</button>
+          <button id="sold-button" class="btn sold" onclick="markAsSold()" style="display:none;">Ürün Satıldı</button>
+          <button id="rescan-button" class="btn secondary" onclick="rescan()">Yeniden Tara</button>
+        </div>
+      </div>
     </div>
 
-    <div id="reader__scan_region"></div>
+    <!-- Scanner card -->
+    <div class="card">
+      <div class="hd">Kamera Tarayıcı</div>
+      <div class="bd">
+        <div class="controls">
+          <label for="cameraSelect">Kamera:</label>
+          <select id="cameraSelect"></select>
 
-    <script defer>
-        // Set your Telegram bot token and chat ID here
-        const TELEGRAM_BOT_TOKEN = '5191762597:AAH6kIJsjfuX6DIbbsfskSrBiNTQI5v8bSk';
-        const TELEGRAM_CHAT_ID = '423739694';
-        const DEFAULT_ZOOM = 2;
+          <button class="btn light" id="startBtn">Başlat</button>
+          <button class="btn secondary" id="stopBtn" disabled>Dur</button>
 
-        function onScanSuccess(qrMessage) {
-            console.log(`QR Kod tespit edildi: ${qrMessage}`);
-            html5QrcodeScanner.clear(); // Stop scanner after successful read
-            fetchProductData(qrMessage); // Fetch product data
-        }
+          <label id="zoomLabel" style="display:none;">Yakınlaştırma:
+            <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1">
+          </label>
 
-        const html5QrcodeScanner = new Html5QrcodeScanner("reader__scan_region", { fps: 10, qrbox: 350 });
-        html5QrcodeScanner.render(onScanSuccess, undefined, adjustZoom);
+          <button class="btn" id="torchBtn" style="display:none;">Flaş Aç</button>
+        </div>
 
-        function adjustZoom() {
-            // Access the media stream from the camera
-            const videoTracks = html5QrcodeScanner.getRunningTrack();
+        <div id="videoWrap" style="margin-top:12px;">
+          <div id="reader__scan_region"></div>
+        </div>
+        <div class="hint">İpucu: Destekleyen cihazlarda yakınlaştırma ve flaş kullanılabilir. iOS Safari genelde zoom/focus kısıtlıdır.</div>
+      </div>
+    </div>
+  </div>
 
-            if (videoTracks && videoTracks.applyConstraints) {
-                videoTracks.applyConstraints({
-                    advanced: [{ zoom: DEFAULT_ZOOM, focusMode:"continous" }]
-                }).catch(error => console.warn("Zoom not supported on this device:", error));
-            } else {
-                console.warn("Zoom adjustment not available.");
-            }
-        }
+  <script>
+    // =================== CONFIG ===================
+    // NEVER expose your Telegram token in frontend code.
+    const TELEGRAM_BACKEND_ENDPOINT = ""; 
+    // e.g. "/api/sold" on your server. Leave empty to disable Telegram sending.
 
-        function fetchProductData(qrLink) {
-            Papa.parse("products.csv", {
-                download: true,
-                header: true,
-                complete: function(results) {
-                    const rows = results.data;
-                    const product = rows.find(row => row.link === qrLink);
-                    if (product) {
-                        document.getElementById("name-tr").innerText = product.name_tr;
-                        const price = (parseFloat(product.price) * 1.2).toFixed(2); // Add tax to price
-                        document.getElementById("price").innerText = `₺${price}`;
-                        document.getElementById("model").innerText = product.model;
-                        document.getElementById("product-image").src = product.image;
-                        document.getElementById("product-link").style.display = "inline-block";
-                        document.getElementById("sold-button").style.display = "inline-block";
-                        document.getElementById("product-link").setAttribute("data-link", product.link);
-                    } else {
-                        document.getElementById("name-tr").innerText = "[Ürün bulunamadı]";
-                        document.getElementById("price").innerText = "[Ürün bulunamadı]";
-                        document.getElementById("model").innerText = "[Ürün bulunamadı]";
-                        document.getElementById("product-image").src = "placeholder.jpg";
-                        document.getElementById("product-link").style.display = "none";
-                        document.getElementById("sold-button").style.display = "none";
-                    }
+    const SCAN_FPS = 12;
+    const QRBOX_SIZE = 320;
+    const DEFAULT_ZOOM = 2; // applied if supported
+    // ==============================================
+
+    let html5QrCode = null;
+    let runningCameraId = null;
+    let runningTrack = null;
+    let torchOn = false;
+
+    const el = (id) => document.getElementById(id);
+    const cameraSelect = el("cameraSelect");
+    const startBtn = el("startBtn");
+    const stopBtn = el("stopBtn");
+    const zoomSlider = el("zoomSlider");
+    const zoomLabel = el("zoomLabel");
+    const torchBtn = el("torchBtn");
+
+    // Populate camera list
+    async function listCameras() {
+      const cams = await Html5Qrcode.getCameras();
+      cameraSelect.innerHTML = "";
+      cams.forEach((c, i) => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.label || `Kamera ${i+1}`;
+        cameraSelect.appendChild(opt);
+      });
+
+      // Prefer back camera if we can guess it (often last / contains "back"/"rear")
+      let preferred = cams.find(c => /back|rear|environment/i.test(c.label)) || cams[cams.length - 1] || cams[0];
+      if (preferred) cameraSelect.value = preferred.id;
+    }
+
+    // Start scanning
+    async function startScanner() {
+      try {
+        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader__scan_region");
+        runningCameraId = cameraSelect.value;
+
+        await html5QrCode.start(
+          { deviceId: { exact: runningCameraId } },
+          { fps: SCAN_FPS, qrbox: QRBOX_SIZE, aspectRatio: 1.7778 },
+          onScanSuccess,
+          onScanError
+        );
+
+        // After start, try to configure zoom / focus / torch
+        runningTrack = html5QrCode.getRunningTrack && html5QrCode.getRunningTrack();
+        if (runningTrack && runningTrack.getCapabilities) {
+          const caps = runningTrack.getCapabilities();
+
+          // Zoom support
+          if (caps.zoom) {
+            zoomSlider.min = caps.zoom.min || 1;
+            zoomSlider.max = caps.zoom.max || 3;
+            zoomSlider.step = caps.zoom.step || 0.1;
+            // set default near DEFAULT_ZOOM (clamped)
+            const initZoom = Math.max(zoomSlider.min, Math.min(zoomSlider.max, DEFAULT_ZOOM));
+            zoomSlider.value = initZoom;
+            await applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
+            zoomLabel.style.display = "inline-block";
+          } else {
+            zoomLabel.style.display = "none";
+          }
+
+          // Continuous focus if possible
+          if (caps.focusMode && caps.focusMode.includes("continuous")) {
+            await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
+          }
+
+          // Torch support
+          if (caps.torch) {
+            torchBtn.style.display = "inline-block";
+            torchBtn.textContent = "Flaş Aç";
+            torchOn = false;
+          } else {
+            torchBtn.style.display = "none";
+          }
+
+          // Tap-to-focus hint (very limited support)
+          const videoEl = document.querySelector("#reader__scan_region video");
+          if (videoEl) {
+            videoEl.addEventListener("click", async () => {
+              if (runningTrack && runningTrack.applyConstraints) {
+                // Try a brief refocus by toggling focusMode if supported
+                if (caps.focusMode && caps.focusMode.includes("continuous")) {
+                  await applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(()=>{});
                 }
+              }
             });
+          }
         }
 
-        function goToProduct() {
-            const link = document.getElementById("product-link").getAttribute("data-link");
-            if (link) {
-                window.location.href = link;
-            }
-        }
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+      } catch (err) {
+        console.error("Start error:", err);
+        alert("Kamera başlatılamadı. Tarayıcı izinlerini ve başka uygulamaların kamerayı kullanmadığını kontrol edin.");
+      }
+    }
 
-        function markAsSold() {
-            const productName = document.getElementById("name-tr").innerText;
-            const productPrice = document.getElementById("price").innerText;
-            const productModel = document.getElementById("model").innerText;
-
-            const message = `Başlık: ${productName}\n` +
-                            `Fiyat: ${productPrice}\n` +
-                            `Stok Kodu: ${productModel}` +
-                            `Ürün Satıldı!\n\n`;
-
-            // Send message via Telegram API
-            fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    chat_id: TELEGRAM_CHAT_ID,
-                    text: message
-                })
-            })
-            .then(response => {
-                if (response.ok) {
-                    alert("Telegram mesajı başarıyla gönderildi!");
-                } else {
-                    alert("Telegram mesajı gönderilemedi.");
-                }
-            })
-            .catch(error => console.error("Telegram API hatası:", error));
+    async function stopScanner() {
+      try {
+        if (html5QrCode && html5QrCode.isScanning) {
+          await html5QrCode.stop();
         }
+        runningTrack = null;
+      } catch(e) {
+        console.warn("Stop error:", e);
+      } finally {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    }
 
-        function rescan() {
-            html5QrcodeScanner.clear();
-            html5QrcodeScanner.render(onScanSuccess);
-            document.getElementById("name-tr").innerText = "[Henüz taranmadı.]";
-            document.getElementById("price").innerText = "[Henüz taranmadı.]";
-            document.getElementById("model").innerText = "[Henüz taranmadı.]";
-            document.getElementById("product-image").src = "placeholder.jpg";
-            document.getElementById("product-link").style.display = "none";
-            document.getElementById("sold-button").style.display = "none";
-        }
-    </script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 20px;
-        }
+    function onScanSuccess(qrText) {
+      console.log("QR Kod:", qrText);
+      stopScanner(); // Stop after a successful scan
+      fetchProductData(qrText);
+    }
+    function onScanError(err) {
+      // Silence frequent decode errors
+    }
 
-        #info {
-            width: 300px;
-            border: 1px solid #ccc;
-            padding: 15px;
-            margin-bottom: 20px;
-            border-radius: 8px;
-            text-align: center;
-            background-color: #f9f9f9;
-        }
+    async function applyConstraints(constraints) {
+      if (runningTrack && runningTrack.applyConstraints) {
+        await runningTrack.applyConstraints(constraints);
+      }
+    }
 
-        #info img {
-            max-width: 100%;
-            margin: 10px auto;
-            display: block;
-        }
+    // UI events
+    startBtn.addEventListener("click", startScanner);
+    stopBtn.addEventListener("click", stopScanner);
+    zoomSlider.addEventListener("input", async (e) => {
+      await applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] }).catch(err => console.warn("Zoom not supported:", err));
+    });
+    torchBtn.addEventListener("click", async () => {
+      torchOn = !torchOn;
+      await applyConstraints({ advanced: [{ torch: torchOn }] }).catch(err => {
+        torchOn = !torchOn; // revert
+        console.warn("Torch not supported:", err);
+      });
+      torchBtn.textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
+    });
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
+    // CSV lookup (kept from your original, with small tweaks)
+    function fetchProductData(qrLink) {
+      Papa.parse("products.csv", {
+        download: true,
+        header: true,
+        complete: function(results) {
+          const rows = results.data || [];
+          const product = rows.find(row => (row.link || "").trim() === (qrLink || "").trim());
+          if (product) {
+            el("name-tr").innerText = product.name_tr || "-";
+            const price = Number(product.price);
+            const taxed = isFinite(price) ? (price * 1.20).toFixed(2) : "-";
+            el("price").innerText = taxed === "-" ? "-" : `₺${taxed}`;
+            el("model").innerText = product.model || "-";
+            el("product-image").src = product.image || "placeholder.jpg";
+            el("product-link").style.display = "inline-block";
+            el("sold-button").style.display = "inline-block";
+            el("product-link").setAttribute("data-link", product.link || "");
+          } else {
+            resetInfo();
+            alert("Ürün bulunamadı.");
+          }
+        },
+        error: function(err) {
+          console.error("CSV hatası:", err);
+          alert("Ürün listesini yükleyemedik (products.csv).");
         }
+      });
+    }
 
-        th, td {
-            padding: 8px;
-            text-align: left;
-        }
+    function goToProduct() {
+      const link = el("product-link").getAttribute("data-link");
+      if (link) window.location.href = link;
+    }
 
-        th {
-            font-weight: bold;
-            color: #333;
-            background-color: #e9ecef; /* Light gray background for headers */
-        }
+    async function markAsSold() {
+      const productName = el("name-tr").innerText;
+      const productPrice = el("price").innerText;
+      const productModel = el("model").innerText;
 
-        tr:nth-child(odd) {
-            background-color: #f2f2f2; /* Light gray for odd rows */
-        }
+      const message =
+        `Başlık: ${productName}\n` +
+        `Fiyat: ${productPrice}\n` +
+        `Stok Kodu: ${productModel}\n` +
+        `Ürün Satıldı!\n`;
 
-        tr:nth-child(even) {
-            background-color: #ffffff; /* White for even rows */
-        }
+      if (!TELEGRAM_BACKEND_ENDPOINT) {
+        alert("Telegram gönderimi devre dışı (backend endpoint tanımlı değil).");
+        return;
+      }
 
-        tr:hover {
-            background-color: #d1ecf1; /* Light blue on hover */
-            transition: background-color 0.3s;
+      try {
+        const res = await fetch(TELEGRAM_BACKEND_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: message })
+        });
+        if (res.ok) {
+          alert("Telegram mesajı gönderildi.");
+        } else {
+          alert("Telegram mesajı gönderilemedi.");
         }
+      } catch (e) {
+        console.error("Telegram hata:", e);
+        alert("Telegram servisine bağlanırken hata oluştu.");
+      }
+    }
 
-        .btn {
-            padding: 10px 20px;
-            font-size: 16px;
-            margin: 10px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            background-color: #007bff;
-            color: white;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: background-color 0.3s;
-        }
+    function resetInfo() {
+      el("name-tr").innerText = "[Henüz taranmadı.]";
+      el("price").innerText = "[Henüz taranmadı.]";
+      el("model").innerText = "[Henüz taranmadı.]";
+      el("product-image").src = "placeholder.jpg";
+      el("product-link").style.display = "none";
+      el("sold-button").style.display = "none";
+    }
 
-        .btn:hover {
-            background-color: #0056b3;
-        }
-    </style>
+    async function rescan() {
+      resetInfo();
+      await stopScanner();
+      await startScanner();
+    }
+
+    // Initialize camera list on load
+    (async () => {
+      try {
+        await listCameras();
+      } catch (e) {
+        console.error(e);
+        alert("Kameralar listelenemedi. Tarayıcı izinlerini kontrol edin.");
+      }
+    })();
+
+    // Expose some functions used in HTML attributes
+    window.goToProduct = goToProduct;
+    window.markAsSold = markAsSold;
+    window.rescan = rescan;
+  </script>
 </body>
 </html>
