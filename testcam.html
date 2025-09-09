@@ -146,343 +146,394 @@
   </div>
 
   <script type="module">
-    // ================== CONFIG ==================
-    // IMPORTANT SECURITY NOTE:
-    // Do NOT ship your Telegram token in client code in production.
-    // Put the token on your server and call a protected endpoint instead.
-    const TELEGRAM_BOT_TOKEN = '5191762597:AAH6kIJsjfuX6DIbbsfskSrBiNTQI5v8bSk';
-    const TELEGRAM_CHAT_ID   = '423739694';
-    const CSV_FILE           = 'products.csv'; // same-origin
-    const TAX_RATE           = 0.20;           // %20
+  // ================== CONFIG ==================
+  // SECURITY: In production, never expose your Telegram token in client code.
+  // Put it behind a server endpoint.
+  const TELEGRAM_BOT_TOKEN = '5191762597:AAH6kIJsjfuX6DIbbsfskSrBiNTQI5v8bSk';
+  const TELEGRAM_CHAT_ID   = '423739694';
+  const CSV_FILE           = 'products.csv'; // same-origin
+  const TAX_RATE           = 0.20;           // %20 KDV
 
-    // Product panel elements
-    const $ = id => document.getElementById(id);
-    const imgEl = $("product-image");
-    const nameEl = $("name-tr");
-    const priceEl = $("price");
-    const modelEl = $("model");
-    const btnProduct = $("product-link");
-    const btnSold = $("sold-button");
+  // ====== DOM refs ======
+  const $ = id => document.getElementById(id);
 
-    // Scanner UI
-    const video = $("video");
-    const selCamera = $("camera");
-    const selRes = $("resolution");
-    const chkTorch = $("torch");
-    const rngZoom = $("zoom");
-    const lblZoom = $("zoomLabel");
-    const selRoi = $("roi");
-    const roiBox = $("roiBox");
-    const btnStart = $("start");
-    const btnStop = $("stop");
-    const resultBox = $("result");
-    const failBox = $("fail");
+  // Product panel
+  const imgEl    = $("product-image");
+  const nameEl   = $("name-tr");
+  const priceEl  = $("price");
+  const modelEl  = $("model");
+  const btnProd  = $("product-link");
+  const btnSold  = $("sold-button");
 
-    // State
-    let stream = null;
-    let currentTrack = null;
-    let lastScannedText = "";
-    let detector = null;     // BarcodeDetector
-    let zxingReader = null;  // ZXing reader
-    let zxingCtrl = null;    // ZXing controls
-    let rafId = 0;
+  // Scanner UI
+  const video     = $("video");
+  const selCamera = $("camera");
+  const selRes    = $("resolution");
+  const chkTorch  = $("torch");
+  const rngZoom   = $("zoom");
+  const lblZoom   = $("zoomLabel");
+  const selRoi    = $("roi");
+  const roiBox    = $("roiBox");
+  const btnStart  = $("start");
+  const btnStop   = $("stop");
+  const resultBox = $("result");
+  const failBox   = $("fail");
 
-    // ====== Product panel functions ======
-    function resetProductUI() {
-      nameEl.textContent = "[Henüz taranmadı.]";
-      priceEl.textContent = "[Henüz taranmadı.]";
-      modelEl.textContent = "[Henüz taranmadı.]";
-      imgEl.src = "placeholder.jpg";
-      btnProduct.style.display = "none";
-      btnSold.style.display = "none";
-      btnProduct.setAttribute("data-link", "");
+  // ====== State ======
+  let stream = null;
+  let currentTrack = null;
+  let lastScannedText = "";
+  let detector = null;     // BarcodeDetector
+  let zxingReader = null;  // ZXing reader
+  let zxingCtrl = null;    // ZXing controls
+  let rafId = 0;
+
+  // ====== Product panel ======
+  function resetProductUI() {
+    nameEl.textContent = "[Henüz taranmadı.]";
+    priceEl.textContent = "[Henüz taranmadı.]";
+    modelEl.textContent = "[Henüz taranmadı.]";
+    imgEl.src = "placeholder.jpg";
+    btnProd.style.display = "none";
+    btnSold.style.display = "none";
+    btnProd.setAttribute("data-link", "");
+  }
+
+  function populateProduct(product) {
+    nameEl.textContent = product.name_tr || "";
+    const p = Number(product.price);
+    const price = Number.isFinite(p) ? (p * (1 + TAX_RATE)).toFixed(2) : "0.00";
+    priceEl.textContent = `₺${price}`;
+    modelEl.textContent = product.model || "";
+    imgEl.src = product.image || "placeholder.jpg";
+    btnProd.style.display = "inline-block";
+    btnProd.setAttribute("data-link", product.link || "");
+    btnSold.style.display = "inline-block";
+  }
+
+  function fetchProductData(qrLink) {
+    Papa.parse(CSV_FILE, {
+      download: true,
+      header: true,
+      complete: function(res) {
+        const rows = res.data || [];
+        const linkNorm = (qrLink || "").trim();
+        const product = rows.find(r => (r.link || "").trim() === linkNorm);
+        if (product) {
+          populateProduct(product);
+        } else {
+          nameEl.textContent = "[Ürün bulunamadı]";
+          priceEl.textContent = "[Ürün bulunamadı]";
+          modelEl.textContent = "[Ürün bulunamadı]";
+          imgEl.src = "placeholder.jpg";
+          btnProd.style.display = "none";
+          btnSold.style.display = "none";
+        }
+      },
+      error: function(err) {
+        console.error("CSV parse error:", err);
+        alert("products.csv okunamadı.");
+      }
+    });
+  }
+
+  // Public button handlers
+  window.goToProduct = function() {
+    const link = btnProd.getAttribute("data-link");
+    if (link) window.location.href = link;
+  };
+
+  window.markAsSold = function() {
+    const productName  = nameEl.textContent;
+    const productPrice = priceEl.textContent;
+    const productModel = modelEl.textContent;
+
+    const message =
+      `Ürün Satıldı!\n\n` +
+      `Başlık: ${productName}\n` +
+      `Fiyat: ${productPrice}\n` +
+      `Stok Kodu: ${productModel}\n` +
+      (btnProd.getAttribute("data-link") ? `Link: ${btnProd.getAttribute("data-link")}\n` : "");
+
+    fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message })
+    })
+    .then(r => r.ok ? alert("Telegram mesajı gönderildi!") : alert("Telegram mesajı gönderilemedi."))
+    .catch(err => console.error("Telegram API hatası:", err));
+  };
+
+  window.rescan = async function() {
+    resetProductUI();
+    clearScanResult();
+    await stopAll();
+    await start();
+  };
+
+  // ====== Scanner helpers ======
+  function parseRes(v) { const [w,h] = v.split("x").map(Number); return {w,h}; }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  function updateRoiBox() {
+    const frac = Number(selRoi.value);
+    const inset = ((1 - frac) * 100) / 2;
+    roiBox.style.inset = `${inset}%`;
+  }
+
+  function setScanResult(text) {
+    resultBox.style.display = "block";
+    resultBox.textContent = text;
+    showFailHint(false);
+  }
+  function clearScanResult() {
+    resultBox.style.display = "none";
+    resultBox.textContent = "";
+  }
+  function showFailHint(show) {
+    failBox.style.display = show ? "block" : "none";
+  }
+
+  function trackFromVideo() {
+    const s = video.srcObject;
+    const tracks = s ? s.getVideoTracks() : [];
+    return tracks[0] || null;
+  }
+
+  async function stopAll() {
+    btnStop.disabled = true;
+    btnStart.disabled = false;
+
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    detector = null;
+
+    if (zxingCtrl?.stop) { try { await zxingCtrl.stop(); } catch {} }
+    if (zxingReader?.reset) { try { zxingReader.reset(); } catch {} }
+    zxingCtrl = null; zxingReader = null;
+
+    if (stream) {
+      for (const t of stream.getTracks()) t.stop();
+      stream = null;
+    }
+    currentTrack = null;
+  }
+
+  async function applyTorch(on) {
+    if (!currentTrack?.getCapabilities) return;
+    const caps = currentTrack.getCapabilities();
+    if (!caps.torch) return;
+    try { await currentTrack.applyConstraints({ advanced: [{ torch: !!on }] }); } catch {}
+  }
+
+  async function applyZoom(value) {
+    lblZoom.textContent = `×${Number(value).toFixed(1)}`;
+    if (!currentTrack?.getCapabilities) return;
+    const caps = currentTrack.getCapabilities();
+    if (!("zoom" in caps)) return;
+    value = clamp(Number(value), caps.zoom.min ?? 1, caps.zoom.max ?? 3);
+    try { await currentTrack.applyConstraints({ advanced: [{ zoom: value }] }); } catch {}
+  }
+
+  // ====== Camera selection that actually sticks ======
+  async function primePermissionsAndListCameras() {
+    // Open a tiny temp stream so labels appear
+    let temp = null;
+    try {
+      temp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (e) {
+      // user may block; we'll still try to list devices
+    }
+    await listCameras();
+    try { temp && temp.getTracks().forEach(t => t.stop()); } catch {}
+  }
+
+  async function listCameras() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videos = devices.filter(d => d.kind === "videoinput");
+
+    const isBack = (s) => /back|rear|environment|arka|задн|trasera|后置|背面/i.test(s || "");
+
+    videos.sort((a, b) => (isBack(a.label) ? 0 : 1) - (isBack(b.label) ? 0 : 1));
+
+    selCamera.innerHTML = "";
+    for (const d of videos) {
+      const opt = document.createElement("option");
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Kamera ${selCamera.length + 1}`;
+      selCamera.appendChild(opt);
     }
 
-    function populateProduct(product) {
-      nameEl.textContent = product.name_tr || "";
-      const p = Number(product.price);
-      const price = Number.isFinite(p) ? (p * (1 + TAX_RATE)).toFixed(2) : "0.00";
-      priceEl.textContent = `₺${price}`;
-      modelEl.textContent = product.model || "";
-      imgEl.src = product.image || "placeholder.jpg";
-      btnProduct.style.display = "inline-block";
-      btnProduct.setAttribute("data-link", product.link || "");
-      btnSold.style.display = "inline-block";
+    const back = videos.find(d => isBack(d.label));
+    if (back) selCamera.value = back.deviceId;
+  }
+
+  async function ensureEnvironmentFacing(stream, preferredDeviceId) {
+    const track = stream.getVideoTracks()[0];
+    const settings = track.getSettings?.() || {};
+    if (settings.facingMode === "environment") return stream;
+
+    // Not environment → retry strongly
+    track.stop();
+
+    if (preferredDeviceId) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: preferredDeviceId } }, audio: false
+        });
+      } catch {}
     }
 
-    function fetchProductData(qrLink) {
-      Papa.parse(CSV_FILE, {
-        download: true,
-        header: true,
-        complete: function(res) {
-          const rows = res.data || [];
-          const linkNorm = (qrLink || "").trim();
-          const product = rows.find(r => (r.link || "").trim() === linkNorm);
-          if (product) {
-            populateProduct(product);
-          } else {
-            nameEl.textContent = "[Ürün bulunamadı]";
-            priceEl.textContent = "[Ürün bulunamadı]";
-            modelEl.textContent = "[Ürün bulunamadı]";
-            imgEl.src = "placeholder.jpg";
-            btnProduct.style.display = "none";
-            btnSold.style.display = "none";
-          }
+    // Last resort
+    return await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: "environment" } }, audio: false
+    });
+  }
+
+  // ====== Start scanning (BarcodeDetector → ZXing) ======
+  async function start() {
+    await stopAll();
+    btnStart.disabled = true;
+    resetProductUI();
+    clearScanResult();
+
+    // Make sure cameras are labeled/filled
+    try { await primePermissionsAndListCameras(); } catch {}
+
+    // Desired resolution
+    const { w,h } = parseRes(selRes.value);
+    const desiredDeviceId = selCamera.value || undefined;
+
+    // First attempt: favor deviceId EXACT, do not also pass facingMode
+    let streamCandidate;
+    try {
+      streamCandidate = await navigator.mediaDevices.getUserMedia({
+        video: {
+          ...(desiredDeviceId ? { deviceId: { exact: desiredDeviceId } }
+                               : { facingMode: { ideal: "environment" } }),
+          width: { ideal: w }, height: { ideal: h },
+          advanced: [{ focusMode: "continuous" }, { exposureMode: "continuous" }]
         },
-        error: function(err) {
-          console.error("CSV parse error:", err);
-          alert("products.csv okunamadı.");
-        }
+        audio: false
       });
+    } catch (e) {
+      // Fallback: any video
+      streamCandidate = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
 
-    window.goToProduct = function() {
-      const link = btnProduct.getAttribute("data-link");
-      if (link) window.location.href = link;
-    };
+    // Verify facing; retry if needed
+    stream = await ensureEnvironmentFacing(streamCandidate, desiredDeviceId);
 
-    window.markAsSold = function() {
-      const productName  = nameEl.textContent;
-      const productPrice = priceEl.textContent;
-      const productModel = modelEl.textContent;
+    // Attach and continue
+    video.srcObject = stream;
+    await video.play();
+    currentTrack = stream.getVideoTracks()[0];
 
-      const message =
-        `Ürün Satıldı!\n\n` +
-        `Başlık: ${productName}\n` +
-        `Fiyat: ${productPrice}\n` +
-        `Stok Kodu: ${productModel}\n` +
-        (btnProduct.getAttribute("data-link") ? `Link: ${btnProduct.getAttribute("data-link")}\n` : "");
-
-      fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message })
-      })
-      .then(r => r.ok ? alert("Telegram mesajı gönderildi!") : alert("Telegram mesajı gönderilemedi."))
-      .catch(err => console.error("Telegram API hatası:", err));
-    };
-
-    window.rescan = async function() {
-      resetProductUI();
-      clearScanResult();
-      await stopAll();
-      await start(); // restart scanner
-    };
-
-    // ====== Scanner helpers ======
-    function parseRes(v) { const [w,h] = v.split("x").map(Number); return {w,h}; }
-    function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-
-    async function listCameras() {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videos = devices.filter(d => d.kind === "videoinput");
-      // sort: prefer back camera labels
-      videos.sort((a,b) => {
-        const score = s => /back|rear|environment/i.test(s.label) ? 0 : 1;
-        return score(a.label||"") - score(b.label||"");
-      });
-      selCamera.innerHTML = "";
-      for (const d of videos) {
-        const opt = document.createElement("option");
-        opt.value = d.deviceId;
-        opt.textContent = d.label || `Kamera ${selCamera.length+1}`;
-        selCamera.appendChild(opt);
+    // Init zoom caps
+    try {
+      const caps = currentTrack?.getCapabilities?.();
+      if (caps && "zoom" in caps) {
+        rngZoom.min  = String(caps.zoom.min ?? 1);
+        rngZoom.max  = String(caps.zoom.max ?? 3);
+        rngZoom.step = String(caps.zoom.step ?? 0.1);
+        rngZoom.disabled = false;
+      } else {
+        rngZoom.disabled = true; lblZoom.textContent = "×—";
       }
-    }
+    } catch {}
 
-    function updateRoiBox() {
-      const frac = Number(selRoi.value);
-      const inset = ((1 - frac) * 100) / 2;
-      roiBox.style.inset = `${inset}%`;
-    }
+    await applyTorch(chkTorch.checked);
 
-    function setScanResult(text) {
-      resultBox.style.display = "block";
-      resultBox.textContent = text;
-      showFailHint(false);
-    }
-    function clearScanResult() {
-      resultBox.style.display = "none";
-      resultBox.textContent = "";
-    }
-    function showFailHint(show) {
-      failBox.style.display = show ? "block" : "none";
-    }
-
-    function trackFromVideo() {
-      const s = video.srcObject;
-      const tracks = s ? s.getVideoTracks() : [];
-      return tracks[0] || null;
-    }
-
-    async function stopAll() {
-      btnStop.disabled = true;
-      btnStart.disabled = false;
-
-      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-      detector = null;
-
-      if (zxingCtrl?.stop) { try { await zxingCtrl.stop(); } catch {} }
-      if (zxingReader?.reset) { try { zxingReader.reset(); } catch {} }
-      zxingCtrl = null; zxingReader = null;
-
-      if (stream) {
-        for (const t of stream.getTracks()) t.stop();
-        stream = null;
-      }
-      currentTrack = null;
-    }
-
-    async function applyTorch(on) {
-      if (!currentTrack?.getCapabilities) return;
-      const caps = currentTrack.getCapabilities();
-      if (!caps.torch) return;
-      try { await currentTrack.applyConstraints({ advanced: [{ torch: !!on }] }); } catch {}
-    }
-
-    async function applyZoom(value) {
-      lblZoom.textContent = `×${Number(value).toFixed(1)}`;
-      if (!currentTrack?.getCapabilities) return;
-      const caps = currentTrack.getCapabilities();
-      if (!("zoom" in caps)) return;
-      value = clamp(Number(value), caps.zoom.min ?? 1, caps.zoom.max ?? 3);
-      try { await currentTrack.applyConstraints({ advanced: [{ zoom: value }] }); } catch {}
-    }
-
-    // ====== Start scanning ======
-    async function start() {
-      await stopAll();
-      btnStart.disabled = true;
-      resetProductUI();
-      clearScanResult();
-
-      // permissions → list cameras
+    // BarcodeDetector first
+    if ('BarcodeDetector' in window) {
       try {
-        await listCameras();
-      } catch {}
-
-      // constraints
-      const { w,h } = parseRes(selRes.value);
-      const deviceId = selCamera.value || undefined;
-      const videoConstraints = deviceId
-        ? { deviceId: { exact: deviceId }, width: { ideal: w }, height: { ideal: h } }
-        : { facingMode: { ideal: "environment" }, width: { ideal: w }, height: { ideal: h } };
-      videoConstraints.advanced = [{ focusMode: "continuous" }, { exposureMode: "continuous" }];
-
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio:false });
-      } catch(e) {
-        alert("Kamera başlatılamadı: " + e.message);
-        btnStart.disabled = false;
+        detector = new BarcodeDetector({ formats: ['qr_code'] });
+        runDetectorLoop();
+        btnStop.disabled = false;
         return;
-      }
+      } catch { /* fall through */ }
+    }
 
-      video.srcObject = stream;
-      await video.play();
-      currentTrack = trackFromVideo();
+    // ZXing fallback
+    const mod = await import('https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/esm/index.min.js');
+    const { BrowserQRCodeReader } = mod;
+    zxingReader = new BrowserQRCodeReader(undefined, {
+      delayBetweenScanAttempts: 80,
+      delayBetweenScanSuccess: 180
+    });
 
-      // init zoom from caps
-      try {
-        const caps = currentTrack?.getCapabilities?.();
-        if (caps && "zoom" in caps) {
-          rngZoom.min = String(caps.zoom.min ?? 1);
-          rngZoom.max = String(caps.zoom.max ?? 3);
-          rngZoom.step = String(caps.zoom.step ?? 0.1);
-          rngZoom.disabled = false;
-        } else {
-          rngZoom.disabled = true;
-          lblZoom.textContent = "×—";
+    const chosenId = currentTrack?.getSettings?.().deviceId || selCamera.value || undefined;
+
+    zxingCtrl = await zxingReader.decodeFromVideoDevice(
+      chosenId,
+      video,
+      (result, err) => {
+        if (result) {
+          const txt = result.getText();
+          onScanSuccess(txt);
         }
-      } catch {}
-
-      await applyTorch(chkTorch.checked);
-
-      // try BarcodeDetector first
-      if ('BarcodeDetector' in window) {
-        try {
-          detector = new BarcodeDetector({ formats: ['qr_code'] });
-          runDetectorLoop(); // rAF loop
-          btnStop.disabled = false;
-          return;
-        } catch { /* continue to ZXing */ }
       }
+    );
 
-      // fallback: ZXing
-      const mod = await import('https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/esm/index.min.js');
-      const { BrowserQRCodeReader } = mod;
-      zxingReader = new BrowserQRCodeReader(undefined, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 180 });
+    btnStop.disabled = false;
+  }
 
-      const chosenId = currentTrack?.getSettings?.().deviceId || selCamera.value || undefined;
-      zxingCtrl = await zxingReader.decodeFromVideoDevice(
-        chosenId,
-        video,
-        (result, err) => {
-          if (result) {
-            const txt = result.getText();
-            onScanSuccess(txt);
+  function runDetectorLoop() {
+    const frac = Number(selRoi.value);
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h || !detector) {
+      rafId = requestAnimationFrame(runDetectorLoop);
+      return;
+    }
+    detector.detect(video).then(codes => {
+      if (codes?.length) {
+        const inset = ((1 - frac) / 2);
+        const x0 = w * inset, y0 = h * inset, x1 = w * (1 - inset), y1 = h * (1 - inset);
+        for (const code of codes) {
+          const raw = code.rawValue ?? null;
+          const box = code.boundingBox;
+          if (!raw || !box) continue;
+          const cx = box.x + box.width/2, cy = box.y + box.height/2;
+          if (cx>=x0 && cx<=x1 && cy>=y0 && cy<=y1) {
+            onScanSuccess(raw);
+            return;
           }
         }
-      );
-
-      btnStop.disabled = false;
-    }
-
-    function runDetectorLoop() {
-      const frac = Number(selRoi.value);
-      const w = video.videoWidth, h = video.videoHeight;
-      if (!w || !h || !detector) {
-        rafId = requestAnimationFrame(runDetectorLoop);
-        return;
+        showFailHint(true);
+      } else {
+        showFailHint(true);
       }
-      detector.detect(video).then(codes => {
-        if (codes?.length) {
-          const inset = ((1 - frac) / 2);
-          const x0 = w * inset, y0 = h * inset, x1 = w * (1 - inset), y1 = h * (1 - inset);
-          for (const code of codes) {
-            const raw = code.rawValue ?? null;
-            const box = code.boundingBox;
-            if (!raw || !box) continue;
-            const cx = box.x + box.width/2, cy = box.y + box.height/2;
-            if (cx>=x0 && cx<=x1 && cy>=y0 && cy<=y1) {
-              onScanSuccess(raw);
-              return; // stop loop in onScanSuccess via stopAll()
-            }
-          }
-          showFailHint(true);
-        } else {
-          showFailHint(true);
-        }
-        rafId = requestAnimationFrame(runDetectorLoop);
-      }).catch(() => { rafId = requestAnimationFrame(runDetectorLoop); });
-    }
+      rafId = requestAnimationFrame(runDetectorLoop);
+    }).catch(() => { rafId = requestAnimationFrame(runDetectorLoop); });
+  }
 
-    async function onScanSuccess(text) {
-      lastScannedText = (text||"").trim();
-      setScanResult(lastScannedText);
-      await stopAll();       // stop after first success
-      fetchProductData(lastScannedText); // lookup in CSV and fill panel
-    }
+  async function onScanSuccess(text) {
+    lastScannedText = (text||"").trim();
+    setScanResult(lastScannedText);
+    await stopAll();                 // stop after first success
+    fetchProductData(lastScannedText);
+  }
 
-    // ====== UI wiring ======
-    btnStart.addEventListener("click", start);
-    btnStop.addEventListener("click", stopAll);
-    selRoi.addEventListener("change", updateRoiBox);
-    updateRoiBox();
+  // ====== Wire UI ======
+  btnStart.addEventListener("click", start);
+  btnStop.addEventListener("click", stopAll);
+  selRoi.addEventListener("change", updateRoiBox);
+  updateRoiBox();
 
-    chkTorch.addEventListener("change", () => applyTorch(chkTorch.checked));
-    rngZoom.addEventListener("input", () => applyZoom(rngZoom.value));
+  chkTorch.addEventListener("change", () => applyTorch(chkTorch.checked));
+  rngZoom.addEventListener("input", () => applyZoom(rngZoom.value));
 
-    // Preload cameras (permission prompt first time)
-    (async () => {
-      try {
-        const temp = await navigator.mediaDevices.getUserMedia({ video: true });
-        temp.getTracks().forEach(t => t.stop());
-      } catch {}
-      try { await listCameras(); } catch {}
-    })();
+  // Prime camera list on load
+  (async () => {
+    try {
+      const temp = await navigator.mediaDevices.getUserMedia({ video: true });
+      temp.getTracks().forEach(t => t.stop());
+    } catch {}
+    try { await listCameras(); } catch {}
+  })();
 
-    window.addEventListener("pagehide", stopAll);
-    window.addEventListener("beforeunload", stopAll);
-  </script>
+  window.addEventListener("pagehide", stopAll);
+  window.addEventListener("beforeunload", stopAll);
+</script>
+
 </body>
 </html>
