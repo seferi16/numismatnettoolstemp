@@ -1,0 +1,78 @@
+<script>
+  // Replace Html5QrcodeScanner usage with direct Html5Qrcode
+  const REGION_ID = "reader__scan_region";
+  const html5Qr = new Html5Qrcode(REGION_ID, { verbose: false });
+
+  // Try to use native Shape Detection API if available (Chrome/Android)
+  const experimentalFeatures = { useBarCodeDetectorIfSupported: true };
+
+  async function startScanner() {
+    // Enumerate cameras and prefer the back one
+    const cams = await Html5Qrcode.getCameras();
+    let camId = cams?.find(c => /back|rear|environment/i.test(c.label))?.id || cams?.[0]?.id;
+    if (!camId) throw new Error("No camera found");
+
+    const videoConstraints = {
+      deviceId: { exact: camId },
+      facingMode: "environment",
+      width:  { ideal: 1920 },   // try HD+
+      height: { ideal: 1080 },
+      // Some browsers accept advanced constraints
+      advanced: [
+        { focusMode: "continuous" },
+        { exposureMode: "continuous" }
+      ]
+    };
+
+    const config = {
+      fps: 24,                    // faster than 10
+      qrbox: 280,                 // tighter ROI = bigger QR in box
+      aspectRatio: 1.0,
+      rememberLastUsedCamera: true,
+      formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
+      experimentalFeatures
+    };
+
+    await html5Qr.start(
+      { video: videoConstraints },
+      config,
+      onScanSuccess,
+      onScanFailure
+    );
+
+    // Try torch on if available
+    tryTorch(true);
+    // Re-wire your zoom controls to use the new track
+    setupZoomControls(getRunningVideoTrack());
+  }
+
+  // Call this instead of html5QrcodeScanner.render(...)
+  startScanner().catch(e => console.error(e));
+
+  function onScanSuccess(text) {
+    console.log("QR:", text);
+    html5Qr.stop().then(() => {
+      fetchProductData(text);
+    });
+  }
+  function onScanFailure() { /* ignore frame misses for speed */ }
+
+  function getRunningVideoTrack() {
+    const region = document.getElementById(REGION_ID);
+    const video = region ? region.querySelector("video") : null;
+    const stream = video?.srcObject;
+    const tracks = stream ? stream.getVideoTracks() : [];
+    return tracks[0] || null;
+  }
+
+  async function tryTorch(on) {
+    const track = getRunningVideoTrack();
+    if (!track || !track.getCapabilities) return;
+    const caps = track.getCapabilities();
+    if (!caps.torch) return;
+    try { await track.applyConstraints({ advanced: [{ torch: !!on }] }); }
+    catch (e) { /* torch may fail on some devices */ }
+  }
+
+  // Reuse your previous setupZoomControls(track), applyZoom(...), etc.
+</script>
