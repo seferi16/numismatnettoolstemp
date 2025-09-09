@@ -62,23 +62,20 @@
           <label for="cameraSelect">Kamera:</label>
           <select id="cameraSelect"></select>
 
-          <button class="btn light" id="startBtn">Başlat</button>
+          <button class="btn light" id="startBackBtn">Arka Kamerayı Aç</button>
           <button class="btn secondary" id="stopBtn" disabled>Dur</button>
 
           <label id="zoomLabel">Yakınlaştırma:
             <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" disabled>
             <span id="zoomVal">1.0x</span>
           </label>
-
-          <button class="btn" id="torchBtn" style="display:none;">Flaş Aç</button>
-          <button class="btn" id="focusBtn">Ortaya Odakla</button>
         </div>
 
         <div id="videoWrap" style="margin-top:12px;">
           <div id="reader__scan_region"></div>
         </div>
         <div class="hint">
-          Sayfayı <b>HTTPS</b> üzerinden açın ve kamera izni verin. Android Chrome çoğu cihazda zoom/torch destekler; iOS Safari genelde kısıtlıdır.
+          Sayfayı <b>HTTPS</b> üzerinden açın ve kamera izni verin. Dropdown’dan kamera seçtiğinizde otomatik yeniden başlar.
         </div>
 
         <h3 style="margin-top:14px;">Debug</h3>
@@ -100,16 +97,13 @@
     let html5QrCode = null;
     let runningTrack = null;
     let capsCache = null;
-    let torchOn = false;
 
     const el = (id) => document.getElementById(id);
     const cameraSelect = el("cameraSelect");
-    const startBtn = el("startBtn");
+    const startBackBtn = el("startBackBtn");
     const stopBtn = el("stopBtn");
     const zoomSlider = el("zoomSlider");
     const zoomVal = el("zoomVal");
-    const torchBtn = el("torchBtn");
-    const focusBtn = el("focusBtn");
     const debugBox = el("debugBox");
 
     function logDebug(msg) {
@@ -118,7 +112,7 @@
       debugBox.scrollTop = debugBox.scrollHeight;
     }
 
-    // Get a usable track (from html5-qrcode or the <video>)
+    // ——— Utils ———
     function resolveVideoTrack() {
       if (html5QrCode && typeof html5QrCode.getRunningTrack === "function") {
         const tr = html5QrCode.getRunningTrack();
@@ -132,15 +126,22 @@
       return null;
     }
 
-    async function listCameras() {
-      // Ask for permission so labels populate
+    function looksLikeBack(label, facing) {
+      if (String(facing).toLowerCase() === "environment") return true;
+      return /tele|macro|environment|back|rear/i.test(label || "");
+    }
+
+    async function ensurePermission() {
       try {
         const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
         tmp.getTracks().forEach(t => t.stop());
       } catch (e) {
-        logDebug("Permission prompt failed/blocked — labels may be empty.");
+        logDebug("⚠️ Kamera izni reddedildi veya engellendi.");
       }
+    }
 
+    async function listCameras() {
+      await ensurePermission(); // helps populate labels
       const cams = await Html5Qrcode.getCameras();
       cameraSelect.innerHTML = "";
       cams.forEach((c, i) => {
@@ -149,201 +150,136 @@
         opt.textContent = c.label || `Kamera ${i+1}`;
         cameraSelect.appendChild(opt);
       });
-
-      // Prefer back/tele/macro
+      // Prefer back-ish
       const preferred =
         cams.find(c => /tele|macro|environment|back|rear/i.test(c.label || "")) ||
         cams.find(c => /back|rear|environment/i.test(c.label || "")) ||
         cams[cams.length - 1] || cams[0];
-
       if (preferred) cameraSelect.value = preferred.id;
-
       logDebug({ cameras: cams.map(c => ({ id: c.id, label: c.label })) });
-    }
-
-    async function startScanner() {
-      try {
-        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader__scan_region");
-
-        const selectedId = cameraSelect.value || null;
-
-        // Try strict back camera first; fallback to selected deviceId
-        const primaryConstraint = { facingMode: { exact: "environment" } };
-        const fallbackConstraint = selectedId
-          ? { deviceId: { exact: selectedId } }
-          : { facingMode: "environment" };
-
-        // Start (primary -> fallback)
-        try {
-          await html5QrCode.start(
-            primaryConstraint,
-            {
-              fps: SCAN_FPS,
-              qrbox: QRBOX_SIZE,
-              aspectRatio: 1.7778,
-              videoConstraints: {
-                width: { ideal: REQUESTED_WIDTH },
-                height: { ideal: REQUESTED_HEIGHT }
-              }
-            },
-            onScanSuccess,
-            onScanError
-          );
-          logDebug("Started with facingMode: environment");
-        } catch (e) {
-          logDebug("Back-facing constraint failed, trying deviceId fallback…");
-          await html5QrCode.start(
-            fallbackConstraint,
-            {
-              fps: SCAN_FPS,
-              qrbox: QRBOX_SIZE,
-              aspectRatio: 1.7778,
-              videoConstraints: {
-                width: { ideal: REQUESTED_WIDTH },
-                height: { ideal: REQUESTED_HEIGHT }
-              }
-            },
-            onScanSuccess,
-            onScanError
-          );
-          logDebug(`Started with deviceId: ${selectedId || "(auto)"}`);
-        }
-
-        // After start, init capabilities
-        await new Promise(r => setTimeout(r, 150));
-        runningTrack = resolveVideoTrack();
-        if (!runningTrack) {
-          logDebug("⚠️ Video track bulunamadı (zoom/odak devre dışı).");
-        } else {
-          const settings = runningTrack.getSettings ? runningTrack.getSettings() : {};
-          const caps = runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
-          capsCache = caps;
-          logDebug({ settings, capabilities: caps });
-
-          // Zoom setup
-          if (caps && caps.zoom) {
-            zoomSlider.disabled = false;
-            zoomSlider.min = caps.zoom.min ?? 1;
-            zoomSlider.max = caps.zoom.max ?? 4;
-            zoomSlider.step = caps.zoom.step ?? 0.1;
-            const initZoom = Math.max(Number(zoomSlider.min), Math.min(Number(zoomSlider.max), DEFAULT_ZOOM));
-            zoomSlider.value = initZoom;
-            zoomVal.textContent = `${Number(zoomSlider.value).toFixed(1)}x`;
-            try { await runningTrack.applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] }); }
-            catch (e) { logDebug(`Zoom init failed: ${e}`); }
-          } else {
-            zoomSlider.disabled = true;
-            logDebug("Zoom capability not exposed.");
-          }
-
-          // Torch visibility (will be hidden on your device if unsupported)
-          if (caps && caps.torch) {
-            torchBtn.style.display = "inline-block";
-          } else {
-            torchBtn.style.display = "none";
-          }
-        }
-
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-      } catch (err) {
-        console.error(err);
-        logDebug(`startScanner error: ${err.message || err}`);
-        alert("Kamera başlatılamadı. Sayfayı HTTPS üzerinden açtığınızdan ve kamera izni verdiğinizden emin olun.");
-      }
+      return cams;
     }
 
     async function stopScanner() {
       try {
-        if (html5QrCode && html5QrCode.isScanning) {
-          await html5QrCode.stop();
-        }
-      } catch (e) {
-        logDebug(`stopScanner error: ${e.message || e}`);
-      } finally {
-        runningTrack = null;
-        capsCache = null;
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
+        if (html5QrCode && html5QrCode.isScanning) await html5QrCode.stop();
+      } catch (e) { logDebug(`stop error: ${e.message || e}`); }
+      runningTrack = null; capsCache = null;
+      stopBtn.disabled = true;
+      zoomSlider.disabled = true;
+    }
+
+    async function startWithConstraint(constraint) {
+      if (!html5QrCode) html5QrCode = new Html5Qrcode("reader__scan_region");
+      await html5QrCode.start(
+        constraint,
+        {
+          fps: SCAN_FPS,
+          qrbox: QRBOX_SIZE,
+          aspectRatio: 1.7778,
+          videoConstraints: { width: { ideal: REQUESTED_WIDTH }, height: { ideal: REQUESTED_HEIGHT } }
+        },
+        onScanSuccess,
+        onScanError
+      );
+      await new Promise(r => setTimeout(r, 120));
+      runningTrack = resolveVideoTrack();
+      const settings = runningTrack && runningTrack.getSettings ? runningTrack.getSettings() : {};
+      const caps = runningTrack && runningTrack.getCapabilities ? runningTrack.getCapabilities() : null;
+      capsCache = caps;
+      logDebug({ startedWith: constraint, settings, capabilities: caps });
+      setupZoomUI(caps);
+      stopBtn.disabled = false;
+      return settings;
+    }
+
+    function setupZoomUI(caps) {
+      if (caps && caps.zoom) {
+        zoomSlider.disabled = false;
+        zoomSlider.min = caps.zoom.min ?? 1;
+        zoomSlider.max = caps.zoom.max ?? 4;
+        zoomSlider.step = caps.zoom.step ?? 0.1;
+        const initZoom = Math.max(Number(zoomSlider.min), Math.min(Number(zoomSlider.max), DEFAULT_ZOOM));
+        zoomSlider.value = initZoom;
+        zoomVal.textContent = `${initZoom.toFixed(1)}x`;
+        runningTrack.applyConstraints({ advanced: [{ zoom: initZoom }] }).catch(() => {});
+      } else {
+        zoomSlider.disabled = true;
       }
     }
 
+    async function startBackOrIterate() {
+      // 1) Try facingMode: environment
+      try {
+        const settings = await startWithConstraint({ facingMode: { exact: "environment" } });
+        if (looksLikeBack(cameraSelect.selectedOptions[0]?.textContent, settings.facingMode)) {
+          logDebug("✅ environment facing accepted.");
+          return;
+        }
+        // if it lies, we’ll iterate below
+        await stopScanner();
+      } catch (e) {
+        logDebug("environment failed, will iterate devices…");
+      }
+
+      // 2) Iterate all cameras until one looks like back
+      const cams = await Html5Qrcode.getCameras();
+      // Sort: back-like first
+      const backish = [], others = [];
+      for (const c of cams) (looksLikeBack(c.label) ? backish : others).push(c);
+      const ordered = backish.concat(others);
+
+      for (const cam of ordered) {
+        try {
+          await stopScanner();
+          await startWithConstraint({ deviceId: { exact: cam.id } });
+          const settings = runningTrack.getSettings ? runningTrack.getSettings() : {};
+          if (looksLikeBack(cam.label, settings.facingMode)) {
+            cameraSelect.value = cam.id; // reflect selection
+            logDebug(`✅ Using deviceId=${cam.id} (${cam.label || "Unnamed"}) as BACK.`);
+            return;
+          } else {
+            logDebug(`Skipping deviceId=${cam.id} (${cam.label || "Unnamed"}) — not back.`);
+          }
+        } catch (e) {
+          logDebug(`Failed starting deviceId=${cam.id}: ${e.message || e}`);
+        }
+      }
+
+      logDebug("❗ Could not find a definite back camera; staying on last successful device.");
+    }
+
+    // ——— QR callbacks ———
     function onScanSuccess(qrText) {
       logDebug({ scanned: qrText });
       stopScanner();
       fetchProductData(qrText);
     }
-    function onScanError(_) { /* ignore frequent decode noise */ }
+    function onScanError(_) {}
 
-    async function applyConstraints(constraints) {
-      if (runningTrack && runningTrack.applyConstraints) {
-        await runningTrack.applyConstraints(constraints);
-      } else {
-        throw new Error("applyConstraints desteklenmiyor (track yok).");
-      }
-    }
+    // ——— Events ———
+    zoomSlider.addEventListener("input", async (e) => {
+      const z = Number(e.target.value);
+      zoomVal.textContent = `${z.toFixed(1)}x`;
+      try { if (runningTrack) await runningTrack.applyConstraints({ advanced: [{ zoom: z }] }); } catch {}
+    });
 
-    // Pinch-to-zoom mapped to the slider
-    function enablePinchToZoom() {
-      const container = document.getElementById("videoWrap");
-      let startDist = null, startZoom = null;
-
-      container.addEventListener("touchstart", (e) => {
-        if (e.touches.length === 2) {
-          startDist = Math.hypot(
-            e.touches[0].pageX - e.touches[1].pageX,
-            e.touches[0].pageY - e.touches[1].pageY
-          );
-          startZoom = Number(zoomSlider.value);
-        }
-      }, { passive: true });
-
-      container.addEventListener("touchmove", async (e) => {
-        if (e.touches.length === 2 && startDist && startZoom != null && !zoomSlider.disabled) {
-          const dist = Math.hypot(
-            e.touches[0].pageX - e.touches[1].pageX,
-            e.touches[0].pageY - e.touches[1].pageY
-          );
-          const delta = (dist - startDist) / 200;
-          let newZoom = Math.max(Number(zoomSlider.min), Math.min(Number(zoomSlider.max), startZoom + delta));
-          if (Math.abs(newZoom - Number(zoomSlider.value)) >= 0.05) {
-            zoomSlider.value = newZoom;
-            zoomVal.textContent = `${newZoom.toFixed(1)}x`;
-            try { await applyConstraints({ advanced: [{ zoom: newZoom }] }); } catch {}
-          }
-        }
-      }, { passive: true });
-
-      container.addEventListener("touchend", () => { startDist = null; startZoom = null; });
-    }
-
-    // Focus center (best-effort; many devices won’t expose this)
-    async function focusCenter() {
-      if (!runningTrack) return logDebug("Focus failed: track yok.");
-      const caps = capsCache || (runningTrack.getCapabilities ? runningTrack.getCapabilities() : null);
+    stopBtn.addEventListener("click", stopScanner);
+    startBackBtn.addEventListener("click", startBackOrIterate);
+    cameraSelect.addEventListener("change", async () => {
+      // user manually picked a camera → start that exact device
       try {
-        if (caps && "pointsOfInterest" in caps) {
-          await applyConstraints({ advanced: [{ pointsOfInterest: [{ x: 0.5, y: 0.5 }] }] });
-          logDebug("pointsOfInterest (0.5,0.5) uygulandı.");
-        } else if (caps && caps.focusMode && caps.focusMode.includes("single-shot")) {
-          await applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
-          logDebug("focusMode: single-shot uygulandı.");
-        } else if (caps && caps.focusMode && caps.focusMode.includes("continuous")) {
-          await applyConstraints({ advanced: [{ focusMode: "continuous" }] });
-          logDebug("focusMode: continuous tekrar uygulandı.");
-        } else {
-          logDebug("Odak kontrolü cihazda mevcut değil.");
-        }
+        await stopScanner();
+        await startWithConstraint({ deviceId: { exact: cameraSelect.value } });
       } catch (e) {
-        logDebug(`Focus error: ${e.message || e}`);
+        logDebug(`Manual pick failed: ${e.message || e}`);
       }
-    }
+    });
 
-    // CSV lookup
+    // ——— CSV lookup ———
     function fetchProductData(qrLink) {
       Papa.parse("products.csv", {
-        download: true,
-        header: true,
+        download: true, header: true,
         complete: function(results) {
           const rows = results.data || [];
           const norm = (s) => (s || "").trim();
@@ -359,50 +295,24 @@
             el("sold-button").style.display = "inline-block";
             el("product-link").setAttribute("data-link", product.link || "");
           } else {
-            resetInfo();
-            alert("Ürün bulunamadı.");
+            resetInfo(); alert("Ürün bulunamadı.");
           }
         },
-        error: function(err) {
-          logDebug(`CSV error: ${err}`);
-          alert("Ürün listesini (products.csv) yükleyemedik.");
-        }
+        error: function(err) { logDebug(`CSV error: ${err}`); alert("Ürün listesini (products.csv) yükleyemedik."); }
       });
     }
-
     function goToProduct() {
       const link = el("product-link").getAttribute("data-link");
       if (link) window.location.href = link;
     }
-
     async function markAsSold() {
-      const productName = el("name-tr").innerText;
-      const productPrice = el("price").innerText;
-      const productModel = el("model").innerText;
-
-      const message =
-        `Başlık: ${productName}\n` +
-        `Fiyat: ${productPrice}\n` +
-        `Stok Kodu: ${productModel}\n` +
-        `Ürün Satıldı!\n`;
-
-      if (!TELEGRAM_BACKEND_ENDPOINT) {
-        alert("Telegram gönderimi devre dışı (backend endpoint tanımlı değil).");
-        return;
-      }
-
+      if (!TELEGRAM_BACKEND_ENDPOINT) return alert("Telegram gönderimi devre dışı (backend yok).");
+      const msg = `Başlık: ${el("name-tr").innerText}\nFiyat: ${el("price").innerText}\nStok Kodu: ${el("model").innerText}\nÜrün Satıldı!\n`;
       try {
-        const res = await fetch(TELEGRAM_BACKEND_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: message })
-        });
+        const res = await fetch(TELEGRAM_BACKEND_ENDPOINT, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ text: msg })});
         alert(res.ok ? "Telegram mesajı gönderildi." : "Telegram mesajı gönderilemedi.");
-      } catch (e) {
-        alert("Telegram servisine bağlanırken hata oluştu.");
-      }
+      } catch { alert("Telegram servisine bağlanırken hata oluştu."); }
     }
-
     function resetInfo() {
       el("name-tr").innerText = "[Henüz taranmadı.]";
       el("price").innerText = "[Henüz taranmadı.]";
@@ -411,46 +321,15 @@
       el("product-link").style.display = "none";
       el("sold-button").style.display = "none";
     }
+    async function rescan() { resetInfo(); await stopScanner(); await startBackOrIterate(); }
 
-    async function rescan() {
-      resetInfo();
-      await stopScanner();
-      await startScanner();
-    }
-
-    // Event bindings
-    startBtn.addEventListener("click", async () => {
-      await startScanner();
-      enablePinchToZoom();
-    });
-    stopBtn.addEventListener("click", stopScanner);
-    zoomSlider.addEventListener("input", async (e) => {
-      const z = Number(e.target.value);
-      zoomVal.textContent = `${z.toFixed(1)}x`;
-      try { await applyConstraints({ advanced: [{ zoom: z }] }); } catch (err) { logDebug(`Zoom change failed: ${err}`); }
-    });
-    torchBtn.addEventListener("click", async () => {
-      if (!(capsCache && capsCache.torch)) return;
-      try {
-        torchOn = !torchOn;
-        await applyConstraints({ advanced: [{ torch: torchOn }] });
-        torchBtn.textContent = torchOn ? "Flaş Kapat" : "Flaş Aç";
-        logDebug(`Torch: ${torchOn ? "ON" : "OFF"}`);
-      } catch (e) {
-        torchOn = !torchOn;
-        logDebug(`Torch failed: ${e.message || e}`);
-      }
-    });
-    focusBtn.addEventListener("click", focusCenter);
-    cameraSelect.addEventListener("change", async () => { await stopScanner(); await startScanner(); });
-
-    // Init
+    // ——— Init ———
     (async () => {
-      try { await listCameras(); logDebug("Hazır. Başlat'a basın."); }
+      try { await listCameras(); logDebug("Hazır. 'Arka Kamerayı Aç' butonuna basın."); }
       catch (e){ logDebug(`Camera list error: ${e.message || e}`); }
     })();
 
-    // Expose globals used by HTML onclick attrs
+    // expose
     window.goToProduct = goToProduct;
     window.markAsSold = markAsSold;
     window.rescan = rescan;
