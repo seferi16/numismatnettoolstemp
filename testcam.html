@@ -3,124 +3,168 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>En İyi QR Tarayıcı (BarcodeDetector + ZXing Fallback)</title>
+  <title>Numismat.net Ürün Tarayıcı (Hızlı QR + CSV + Telegram)</title>
+
+  <!-- CSV parser -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+
   <style>
     :root { --accent:#0d6efd; }
     body {
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      margin: 0; padding: 16px; background:#f6f7fb; color:#222;
-      display:flex; flex-direction:column; gap:16px; align-items:center;
+      background:#f6f7fb; color:#222; margin:0; padding:16px;
+      display:flex; flex-direction:column; align-items:center; gap:16px;
     }
-    h1 { font-size: 20px; margin: 0 0 4px; text-align:center; }
+    h1 { font-size:20px; margin:0; text-align:center; }
+    .container {
+      width:min(980px, 96vw);
+      display:grid; grid-template-columns: 360px 1fr; gap:16px;
+    }
+    @media (max-width:900px){ .container{ grid-template-columns:1fr; } }
+
     .panel {
-      width: min(480px, 94vw);
-      background: #fff; border:1px solid #e6e6e6; border-radius:12px;
-      box-shadow: 0 6px 18px rgba(0,0,0,.06); padding:12px 12px 16px;
+      background:#fff; border:1px solid #e6e6e6; border-radius:12px;
+      box-shadow:0 6px 18px rgba(0,0,0,.06); padding:12px 12px 16px;
     }
+    .panel h2 { font-size:16px; margin:0 0 10px; }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    .row > * { flex: 1 1 auto; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .grid-3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }
+    label { font-size:13px; color:#444; }
+    select, input[type="range"] {
+      width:100%; padding:8px; border-radius:8px; border:1px solid #ddd; background:#fff;
+    }
     .btn {
       background: var(--accent); color:#fff; border:0; padding:10px 14px;
       border-radius:10px; cursor:pointer; font-weight:600;
-      box-shadow: 0 3px 10px rgba(13,110,253,.25);
+      box-shadow:0 3px 10px rgba(13,110,253,.25);
     }
     .btn.secondary { background:#6c757d; box-shadow:none; }
+    .btn.success { background:#28a745; }
     .btn:disabled { opacity:.6; cursor:not-allowed; }
-    select, input[type="range"] {
-      width:100%; padding:8px; border-radius:8px; border:1px solid #ddd;
-      background:#fff;
-    }
-    label { font-size: 13px; color:#444; }
-    #stage {
-      position: relative; width:100%; aspect-ratio: 1 / 1; background:#000;
-      border-radius:12px; overflow:hidden; margin-top:6px;
-    }
-    video {
-      position:absolute; inset:0;
-      width:100%; height:100%; object-fit:cover; image-rendering: auto;
-    }
-    /* ROI guide (square box) */
-    .roi {
-      position:absolute; inset:10%; border:2px dashed rgba(255,255,255,.85);
-      border-radius:12px; pointer-events:none;
-    }
-    /* Result card */
+    .hint { font-size:12px; color:#666; }
+
+    /* Product info */
+    #info img { width:100%; height:auto; border-radius:8px; border:1px solid #eee; }
+    #info table { width:100%; border-collapse:collapse; margin-top:8px; }
+    #info th, #info td { padding:6px 8px; text-align:left; }
+    #info th { background:#e9ecef; width:110px; }
+    #info tr:nth-child(odd) td { background:#f8f9fa; }
+
+    /* Scanner stage */
+    #stage { position:relative; width:100%; aspect-ratio:1/1; background:#000;
+      border-radius:12px; overflow:hidden; margin-top:6px; }
+    video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    .roi { position:absolute; inset:15%; border:2px dashed rgba(255,255,255,.9);
+      border-radius:12px; pointer-events:none; }
     #result {
       background:#0a3622; color:#d1f2e1; border:1px solid #0f5132; padding:10px;
-      border-radius:8px; display:none; word-break:break-word; font-size:14px;
+      border-radius:8px; display:none; word-break:break-word; font-size:14px; margin-top:10px;
     }
     #fail {
       background:#fff3cd; color:#664d03; border:1px solid #ffe69c; padding:8px;
-      border-radius:8px; display:none; font-size:12px;
+      border-radius:8px; display:none; font-size:12px; margin-top:10px;
     }
-    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
-    .grid-3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }
-    .hint { font-size:12px; color:#666; }
-    .switch {
-      display:inline-flex; align-items:center; gap:8px; user-select:none;
-    }
-    .switch input { transform: scale(1.2); }
   </style>
 </head>
 <body>
-  <h1>QR Tarayıcı (Hızlı & Güvenilir)</h1>
+  <h1>Numismat.net Ürün Tarayıcı</h1>
 
-  <div class="panel">
-    <div class="row">
-      <label for="camera">Kamera</label>
-      <select id="camera"></select>
-    </div>
-
-    <div class="grid">
-      <div>
-        <label for="resolution">Çözünürlük</label>
-        <select id="resolution">
-          <option value="1280x720">1280×720 (HD)</option>
-          <option value="1920x1080" selected>1920×1080 (FHD)</option>
-          <option value="2560x1440">2560×1440 (QHD)</option>
-        </select>
+  <div class="container">
+    <!-- LEFT: Product panel -->
+    <div class="panel" id="info">
+      <h2>Ürün Bilgisi</h2>
+      <img id="product-image" src="placeholder.jpg" alt="Ürün Görseli" />
+      <table>
+        <tr><th>Başlık:</th><td id="name-tr">[Henüz taranmadı.]</td></tr>
+        <tr><th>Fiyat:</th><td id="price">[Henüz taranmadı.]</td></tr>
+        <tr><th>Stok Kodu:</th><td id="model">[Henüz taranmadı.]</td></tr>
+      </table>
+      <div class="row" style="margin-top:10px;">
+        <button id="product-link" class="btn" onclick="goToProduct()" style="display:none;">Ürüne Git</button>
+        <button id="sold-button" class="btn success" onclick="markAsSold()" style="display:none;">Ürün Satıldı</button>
+        <button id="rescan-button" class="btn secondary" onclick="rescan()">Yeniden Tara</button>
       </div>
-      <div class="switch" style="align-self:end;">
-        <input id="torch" type="checkbox" />
-        <label for="torch">El Feneri</label>
+      <p class="hint">Not: Fiyat %20 KDV eklenerek gösterilir.</p>
+    </div>
+
+    <!-- RIGHT: Scanner controls + video -->
+    <div class="panel">
+      <h2>Tarayıcı</h2>
+
+      <div class="row">
+        <div style="flex:1 1 180px;">
+          <label for="camera">Kamera</label>
+          <select id="camera"></select>
+        </div>
+        <div style="flex:1 1 140px;">
+          <label for="resolution">Çözünürlük</label>
+          <select id="resolution">
+            <option value="1280x720">1280×720 (HD)</option>
+            <option value="1920x1080" selected>1920×1080 (FHD)</option>
+            <option value="2560x1440">2560×1440 (QHD)</option>
+          </select>
+        </div>
       </div>
-    </div>
 
-    <div class="grid">
-      <div>
-        <label for="zoom">Zoom: <span id="zoomLabel">×1.0</span></label>
-        <input id="zoom" type="range" min="1" max="3" step="0.1" value="1" />
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <label for="zoom">Zoom: <span id="zoomLabel">×1.0</span></label>
+          <input id="zoom" type="range" min="1" max="3" step="0.1" value="1" />
+        </div>
+        <div>
+          <label for="roi">ROI Boyutu</label>
+          <select id="roi">
+            <option value="0.7">Geniş (70%)</option>
+            <option value="0.6" selected>Orta (60%)</option>
+            <option value="0.5">Dar (50%)</option>
+          </select>
+        </div>
       </div>
-      <div>
-        <label for="roi">ROI Boyutu</label>
-        <select id="roi">
-          <option value="0.7">Geniş (70%)</option>
-          <option value="0.6" selected>Orta (60%)</option>
-          <option value="0.5">Dar (50%)</option>
-        </select>
+
+      <div class="row" style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input id="torch" type="checkbox" /> El Feneri
+        </label>
       </div>
+
+      <div class="row" style="margin-top:8px;">
+        <button id="start" class="btn">Başlat</button>
+        <button id="stop" class="btn secondary" disabled>Durdur</button>
+      </div>
+
+      <div id="stage">
+        <video id="video" playsinline muted></video>
+        <div class="roi" id="roiBox"></div>
+      </div>
+
+      <div id="result"></div>
+      <div id="fail" class="hint">İpucu: Kodu ROI içine yaklaştır, parlamayı azalt, lensi sil ve zoomu kademeli arttır.</div>
+
+      <p class="hint">Tarama sırası → <b>BarcodeDetector</b> (varsa) → <b>ZXing</b> (fallback). Torch/Zoom cihaz desteğine bağlıdır.</p>
     </div>
-
-    <div class="row">
-      <button id="start" class="btn">Başlat</button>
-      <button id="stop" class="btn secondary" disabled>Durdur</button>
-    </div>
-
-    <div id="stage">
-      <video id="video" playsinline muted></video>
-      <div class="roi" id="roiBox"></div>
-    </div>
-
-    <div id="result"></div>
-    <div id="fail" class="hint">İpucu: Kodu ROI içine yaklaştır, parlamayı azalt, lensi sil ve zoomu kademeli arttır.</div>
-
-    <p class="hint">Not: Tarama yolu öncelik sırası → <strong>BarcodeDetector</strong> (varsa) → <strong>ZXing</strong> (fallback). Torch/Zoom cihaz desteğine bağlıdır.</p>
   </div>
 
-  <!-- ZXing will be loaded dynamically only if needed -->
   <script type="module">
-    // ======= UI elements =======
+    // ================== CONFIG ==================
+    // IMPORTANT SECURITY NOTE:
+    // Do NOT ship your Telegram token in client code in production.
+    // Put the token on your server and call a protected endpoint instead.
+    const TELEGRAM_BOT_TOKEN = '5191762597:AAH6kIJsjfuX6DIbbsfskSrBiNTQI5v8bSk';
+    const TELEGRAM_CHAT_ID   = '423739694';
+    const CSV_FILE           = 'products.csv'; // same-origin
+    const TAX_RATE           = 0.20;           // %20
+
+    // Product panel elements
     const $ = id => document.getElementById(id);
+    const imgEl = $("product-image");
+    const nameEl = $("name-tr");
+    const priceEl = $("price");
+    const modelEl = $("model");
+    const btnProduct = $("product-link");
+    const btnSold = $("sold-button");
+
+    // Scanner UI
     const video = $("video");
     const selCamera = $("camera");
     const selRes = $("resolution");
@@ -134,31 +178,110 @@
     const resultBox = $("result");
     const failBox = $("fail");
 
-    // ======= State =======
+    // State
     let stream = null;
-    let usingDetector = false;     // true => BarcodeDetector, false => ZXing
-    let detector = null;           // BarcodeDetector instance
-    let rafId = 0;                 // rAF loop for detector
-    let zxingReader = null;        // ZXing reader
-    let zxingCtrl = null;          // ZXing controls
     let currentTrack = null;
+    let lastScannedText = "";
+    let detector = null;     // BarcodeDetector
+    let zxingReader = null;  // ZXing reader
+    let zxingCtrl = null;    // ZXing controls
+    let rafId = 0;
 
-    // ======= Helpers =======
-    function parseRes(v) {
-      const [w, h] = v.split("x").map(Number);
-      return { w, h };
+    // ====== Product panel functions ======
+    function resetProductUI() {
+      nameEl.textContent = "[Henüz taranmadı.]";
+      priceEl.textContent = "[Henüz taranmadı.]";
+      modelEl.textContent = "[Henüz taranmadı.]";
+      imgEl.src = "placeholder.jpg";
+      btnProduct.style.display = "none";
+      btnSold.style.display = "none";
+      btnProduct.setAttribute("data-link", "");
     }
-    function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+    function populateProduct(product) {
+      nameEl.textContent = product.name_tr || "";
+      const p = Number(product.price);
+      const price = Number.isFinite(p) ? (p * (1 + TAX_RATE)).toFixed(2) : "0.00";
+      priceEl.textContent = `₺${price}`;
+      modelEl.textContent = product.model || "";
+      imgEl.src = product.image || "placeholder.jpg";
+      btnProduct.style.display = "inline-block";
+      btnProduct.setAttribute("data-link", product.link || "");
+      btnSold.style.display = "inline-block";
+    }
+
+    function fetchProductData(qrLink) {
+      Papa.parse(CSV_FILE, {
+        download: true,
+        header: true,
+        complete: function(res) {
+          const rows = res.data || [];
+          const linkNorm = (qrLink || "").trim();
+          const product = rows.find(r => (r.link || "").trim() === linkNorm);
+          if (product) {
+            populateProduct(product);
+          } else {
+            nameEl.textContent = "[Ürün bulunamadı]";
+            priceEl.textContent = "[Ürün bulunamadı]";
+            modelEl.textContent = "[Ürün bulunamadı]";
+            imgEl.src = "placeholder.jpg";
+            btnProduct.style.display = "none";
+            btnSold.style.display = "none";
+          }
+        },
+        error: function(err) {
+          console.error("CSV parse error:", err);
+          alert("products.csv okunamadı.");
+        }
+      });
+    }
+
+    window.goToProduct = function() {
+      const link = btnProduct.getAttribute("data-link");
+      if (link) window.location.href = link;
+    };
+
+    window.markAsSold = function() {
+      const productName  = nameEl.textContent;
+      const productPrice = priceEl.textContent;
+      const productModel = modelEl.textContent;
+
+      const message =
+        `Ürün Satıldı!\n\n` +
+        `Başlık: ${productName}\n` +
+        `Fiyat: ${productPrice}\n` +
+        `Stok Kodu: ${productModel}\n` +
+        (btnProduct.getAttribute("data-link") ? `Link: ${btnProduct.getAttribute("data-link")}\n` : "");
+
+      fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message })
+      })
+      .then(r => r.ok ? alert("Telegram mesajı gönderildi!") : alert("Telegram mesajı gönderilemedi."))
+      .catch(err => console.error("Telegram API hatası:", err));
+    };
+
+    window.rescan = async function() {
+      resetProductUI();
+      clearScanResult();
+      await stopAll();
+      await start(); // restart scanner
+    };
+
+    // ====== Scanner helpers ======
+    function parseRes(v) { const [w,h] = v.split("x").map(Number); return {w,h}; }
+    function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
     async function listCameras() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videos = devices.filter(d => d.kind === "videoinput");
-      selCamera.innerHTML = "";
-      // Prefer back/rear/environment labeled items
+      // sort: prefer back camera labels
       videos.sort((a,b) => {
         const score = s => /back|rear|environment/i.test(s.label) ? 0 : 1;
-        return score(a) - score(b);
+        return score(a.label||"") - score(b.label||"");
       });
+      selCamera.innerHTML = "";
       for (const d of videos) {
         const opt = document.createElement("option");
         opt.value = d.deviceId;
@@ -168,40 +291,41 @@
     }
 
     function updateRoiBox() {
-      const frac = Number(selRoi.value); // 0.5 ~ 0.7
+      const frac = Number(selRoi.value);
       const inset = ((1 - frac) * 100) / 2;
       roiBox.style.inset = `${inset}%`;
     }
 
-    function setResult(text) {
+    function setScanResult(text) {
       resultBox.style.display = "block";
       resultBox.textContent = text;
+      showFailHint(false);
     }
-
-    function clearResult() {
+    function clearScanResult() {
       resultBox.style.display = "none";
       resultBox.textContent = "";
     }
-
     function showFailHint(show) {
       failBox.style.display = show ? "block" : "none";
+    }
+
+    function trackFromVideo() {
+      const s = video.srcObject;
+      const tracks = s ? s.getVideoTracks() : [];
+      return tracks[0] || null;
     }
 
     async function stopAll() {
       btnStop.disabled = true;
       btnStart.disabled = false;
-      showFailHint(false);
-      clearResult();
 
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-      if (detector) { detector = null; }
-      if (zxingCtrl && zxingCtrl.stop) {
-        try { await zxingCtrl.stop(); } catch {}
-        zxingCtrl = null;
-      }
-      if (zxingReader && zxingReader.reset) {
-        try { zxingReader.reset(); } catch {}
-      }
+      detector = null;
+
+      if (zxingCtrl?.stop) { try { await zxingCtrl.stop(); } catch {} }
+      if (zxingReader?.reset) { try { zxingReader.reset(); } catch {} }
+      zxingCtrl = null; zxingReader = null;
+
       if (stream) {
         for (const t of stream.getTracks()) t.stop();
         stream = null;
@@ -225,30 +349,29 @@
       try { await currentTrack.applyConstraints({ advanced: [{ zoom: value }] }); } catch {}
     }
 
-    function trackFromVideo() {
-      const s = video.srcObject;
-      const tracks = s ? s.getVideoTracks() : [];
-      return tracks[0] || null;
-    }
-
-    // ======= Start pipeline =======
+    // ====== Start scanning ======
     async function start() {
       await stopAll();
       btnStart.disabled = true;
+      resetProductUI();
+      clearScanResult();
 
-      // camera constraints
-      const { w, h } = parseRes(selRes.value);
+      // permissions → list cameras
+      try {
+        await listCameras();
+      } catch {}
+
+      // constraints
+      const { w,h } = parseRes(selRes.value);
       const deviceId = selCamera.value || undefined;
       const videoConstraints = deviceId
         ? { deviceId: { exact: deviceId }, width: { ideal: w }, height: { ideal: h } }
         : { facingMode: { ideal: "environment" }, width: { ideal: w }, height: { ideal: h } };
-
-      // advanced focus/exposure if available
       videoConstraints.advanced = [{ focusMode: "continuous" }, { exposureMode: "continuous" }];
 
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
-      } catch (e) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio:false });
+      } catch(e) {
         alert("Kamera başlatılamadı: " + e.message);
         btnStart.disabled = false;
         return;
@@ -258,101 +381,89 @@
       await video.play();
       currentTrack = trackFromVideo();
 
-      // Initialize zoom UI from capabilities
+      // init zoom from caps
       try {
         const caps = currentTrack?.getCapabilities?.();
         if (caps && "zoom" in caps) {
           rngZoom.min = String(caps.zoom.min ?? 1);
           rngZoom.max = String(caps.zoom.max ?? 3);
           rngZoom.step = String(caps.zoom.step ?? 0.1);
-          rngZoom.value = String(clamp(parseFloat(rngZoom.value) || 1, Number(rngZoom.min), Number(rngZoom.max)));
-          lblZoom.textContent = `×${Number(rngZoom.value).toFixed(1)}`;
+          rngZoom.disabled = false;
         } else {
-          // hide zoom if unsupported
           rngZoom.disabled = true;
           lblZoom.textContent = "×—";
         }
       } catch {}
 
-      // Torch initial
       await applyTorch(chkTorch.checked);
 
-      // Try BarcodeDetector first
-      usingDetector = 'BarcodeDetector' in window;
-      if (usingDetector) {
+      // try BarcodeDetector first
+      if ('BarcodeDetector' in window) {
         try {
           detector = new BarcodeDetector({ formats: ['qr_code'] });
-          runDetectorLoop();
+          runDetectorLoop(); // rAF loop
           btnStop.disabled = false;
           return;
-        } catch (e) {
-          // Some browsers expose BarcodeDetector but throw on instantiation
-          usingDetector = false;
-        }
+        } catch { /* continue to ZXing */ }
       }
 
-      // Fallback to ZXing (@zxing/browser)
-      usingDetector = false;
+      // fallback: ZXing
       const mod = await import('https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/esm/index.min.js');
-      const { BrowserQRCodeReader, IScannerControls } = mod;
-
+      const { BrowserQRCodeReader } = mod;
       zxingReader = new BrowserQRCodeReader(undefined, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 180 });
-      // Find the exact deviceId of the running track to keep constraints
-      const settings = currentTrack.getSettings();
-      const chosenId = settings.deviceId || selCamera.value || undefined;
 
+      const chosenId = currentTrack?.getSettings?.().deviceId || selCamera.value || undefined;
       zxingCtrl = await zxingReader.decodeFromVideoDevice(
         chosenId,
         video,
-        (result, err, controls) => {
+        (result, err) => {
           if (result) {
-            setResult(result.getText());
-            stopAll(); // stop after first success; remove if you want continuous
+            const txt = result.getText();
+            onScanSuccess(txt);
           }
         }
       );
+
       btnStop.disabled = false;
     }
 
     function runDetectorLoop() {
       const frac = Number(selRoi.value);
-      const w = video.videoWidth;
-      const h = video.videoHeight;
+      const w = video.videoWidth, h = video.videoHeight;
       if (!w || !h || !detector) {
         rafId = requestAnimationFrame(runDetectorLoop);
         return;
       }
-
-      // Use detect() directly on video — modern Chrome supports this
       detector.detect(video).then(codes => {
-        if (codes && codes.length) {
-          // Filter by ROI (center square)
+        if (codes?.length) {
           const inset = ((1 - frac) / 2);
           const x0 = w * inset, y0 = h * inset, x1 = w * (1 - inset), y1 = h * (1 - inset);
-
           for (const code of codes) {
-            const raw = code.rawValue || code.rawValue === "" ? code.rawValue : null;
+            const raw = code.rawValue ?? null;
             const box = code.boundingBox;
             if (!raw || !box) continue;
-            const cx = box.x + box.width / 2;
-            const cy = box.y + box.height / 2;
-            if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) {
-              setResult(raw);
-              stopAll(); // stop after first success; remove if you want continuous
-              return;
+            const cx = box.x + box.width/2, cy = box.y + box.height/2;
+            if (cx>=x0 && cx<=x1 && cy>=y0 && cy<=y1) {
+              onScanSuccess(raw);
+              return; // stop loop in onScanSuccess via stopAll()
             }
           }
+          showFailHint(true);
         } else {
           showFailHint(true);
         }
         rafId = requestAnimationFrame(runDetectorLoop);
-      }).catch(() => {
-        // On any error, keep trying
-        rafId = requestAnimationFrame(runDetectorLoop);
-      });
+      }).catch(() => { rafId = requestAnimationFrame(runDetectorLoop); });
     }
 
-    // ======= Events =======
+    async function onScanSuccess(text) {
+      lastScannedText = (text||"").trim();
+      setScanResult(lastScannedText);
+      await stopAll();       // stop after first success
+      fetchProductData(lastScannedText); // lookup in CSV and fill panel
+    }
+
+    // ====== UI wiring ======
     btnStart.addEventListener("click", start);
     btnStop.addEventListener("click", stopAll);
     selRoi.addEventListener("change", updateRoiBox);
@@ -361,22 +472,15 @@
     chkTorch.addEventListener("change", () => applyTorch(chkTorch.checked));
     rngZoom.addEventListener("input", () => applyZoom(rngZoom.value));
 
-    // Refresh camera list on load and when permissions change
+    // Preload cameras (permission prompt first time)
     (async () => {
       try {
-        await listCameras();
+        const temp = await navigator.mediaDevices.getUserMedia({ video: true });
+        temp.getTracks().forEach(t => t.stop());
       } catch {}
-      // if none labeled yet, request permission by opening a dummy stream quickly
-      if (!selCamera.options.length) {
-        try {
-          const temp = await navigator.mediaDevices.getUserMedia({ video: true });
-          temp.getTracks().forEach(t => t.stop());
-          await listCameras();
-        } catch {}
-      }
+      try { await listCameras(); } catch {}
     })();
 
-    // Stop tracks when leaving page
     window.addEventListener("pagehide", stopAll);
     window.addEventListener("beforeunload", stopAll);
   </script>
